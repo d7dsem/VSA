@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "vsa_file_entry (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/vsa_file_entry.py",
+            "args": [],
+            "console": "integratedTerminal"
+        }
+    ]
+}
