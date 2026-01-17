@@ -12,7 +12,7 @@ def get_scale_from_units(unit: Literal["M", "K"]) -> float:
     if unit == "M": return 1e-6
     return 1
 
-class VSA_SPECTR:
+class VSA_SPECTR_old:
     def __init__(
         self,
         freqs: np.ndarray,
@@ -158,15 +158,14 @@ class VSA_SPECTR:
     ) -> None:
         # RAW
         self._line_raw_spec.set_ydata(spectr_arr)
-
+        y_ref = spectr_arr
         # SMOOTH
         if smoothed is None:
             self._line_smooth_spec.set_visible(False)
-            y_ref = spectr_arr
+
         else:
             self._line_smooth_spec.set_ydata(smoothed)
             self._line_smooth_spec.set_visible(True)
-            y_ref = smoothed
 
         _title = self._base_title
         if title:
@@ -178,6 +177,236 @@ class VSA_SPECTR:
         self.fig.canvas.draw_idle()
         plt.pause(self.render_dt)
 
+class VSA_SPECTR:
+    def __init__(
+        self,
+        freqs: np.ndarray,
+        use_dbfs: bool,
+        freq_units: Literal["M", "K"] = "M",
+        spec_y_lim: Optional[Tuple[float, float]] = None,
+        spec_y_hyst_up: float = 3.0,
+        spec_y_hyst_dn: float = 3.0,
+        title_base: Optional[str] = None,
+        # === NEW: shrink control (update-count based) ===
+        y_shrink_hold_updates: int = 2,
+        y_shrink_recover_updates: int = 4,
+        y_shrink_margin_db: float = 2.0,
+        # === legacy sink (keeps contract for dead params like render_dt) ===
+        **_legacy_kwargs,
+    ):
+        """
+        Spectrum visualization only. (raw + optional smoothed)
+        Render as Line2D (faster than bars).
+        """
+        self.freq_units = freq_units
+        self.freq_scale: float = get_scale_from_units(freq_units)
+
+        self.freqs = freqs
+        self.x_freq = self.freqs * self.freq_scale
+
+        self.dF = float(self.freqs[1] - self.freqs[0])
+        self._y_label_spec = "power (dBFS)" if use_dbfs else "magn (linear)"
+        self.use_dbfs = use_dbfs
+
+        self._base_title = title_base if title_base else (
+            f"SPECTRUM  FFT={len(freqs)}  |  dF={self.dF * self.freq_scale:.3f} {freq_units}Hz"
+        )
+
+        # Hard y-limits
+        self._spec_y_lim: Optional[Tuple[float, float]] = spec_y_lim
+
+        # Hysteresis for spectrum
+        self._spec_y_hyst_up = float(spec_y_hyst_up)
+        self._spec_y_hyst_dn = float(spec_y_hyst_dn)
+
+        # Guard fraction for y-limit updates
+        self._y_guard_frac = 0.10
+
+        # === NEW: shrink state/params (update-count based) ===
+        self._y_shrink_hold_updates = int(y_shrink_hold_updates)
+        self._y_shrink_recover_updates = max(int(y_shrink_recover_updates), 1)
+        self._y_shrink_margin_db = float(y_shrink_margin_db)
+
+        self._y_quiet_updates = 0
+        self._y_shrink_active = False
+        self._y_shrink_step_ymax = 0.0
+        self._y_shrink_step_ymin = 0.0
+
+        # Spectrum y-scale state
+        self._spec_ylim_inited = False
+        self._spec_ymin = 0.0
+        self._spec_ymax = 0.0
+
+        # Control
+        self._stop = False
+        self.paused: bool = False
+        self._step_delta: int = 0
+
+        # Figure + subplot
+        self.fig, self.ax_spec = plt.subplots(figsize=(12, 6))
+        self.fig.canvas.mpl_connect("key_press_event", self._on_key)
+        self.fig.canvas.mpl_connect("close_event", self._on_figure_close)
+
+        # ===== SPECTRUM PANEL (Line2D) =====
+        (self._line_raw_spec,) = self.ax_spec.plot(
+            self.x_freq,
+            np.zeros_like(self.x_freq),
+            linestyle="-",
+            marker=".",
+            markersize=2.0,
+            linewidth=1.0,
+            color="orange",
+            zorder=2,
+        )
+
+        (self._line_smooth_spec,) = self.ax_spec.plot(
+            self.x_freq,
+            np.zeros_like(self.x_freq),
+            linestyle="-",
+            linewidth=1.0,
+            color="black",
+            zorder=3,
+        )
+        self._line_smooth_spec.set_visible(False)
+
+        self.ax_spec.set_xlabel(f"frequency ({freq_units}Hz)")
+        self.ax_spec.set_ylabel(self._y_label_spec)
+        self.ax_spec.set_title(self._base_title)
+        self.ax_spec.grid(True)
+
+        if self._spec_y_lim is not None:
+            self.ax_spec.set_ylim(self._spec_y_lim[0], self._spec_y_lim[1])
+
+        plt.ion()
+        self.fig.tight_layout(pad=2)
+        plt.show(block=False)
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
+        plt.pause(0.001)
+
+    def _on_figure_close(self, ev) -> None:
+        print(f"[_ON_FIGURE_CLOSE] Figure closed by user", flush=True)
+        self._stop = True
+
+    def _on_key(self, ev) -> None:
+        print(f"[_ON_KEY] key={ev.key!r}", flush=True)
+        if ev.key == "escape":
+            self._stop = True
+            print(f"[_ON_KEY] pressed ESC (closing figure requested)", flush=True)
+            plt.close(self.fig)
+            self.fig = None
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop
+
+    def figure_alive(self) -> bool:
+        try:
+            return (self.fig is not None) and plt.fignum_exists(self.fig.number)
+        except Exception:
+            return False
+
+    def _shrink_reset(self) -> None:
+        self._y_quiet_updates = 0
+        self._y_shrink_active = False
+        self._y_shrink_step_ymax = 0.0
+        self._y_shrink_step_ymin = 0.0
+
+    def _shrink_arm(self, tgt_ymin: float, tgt_ymax: float) -> None:
+        # fixed step so "recover in N updates" is literal
+        dy_max = max(self._spec_ymax - tgt_ymax, 0.0)
+        dy_min = max(tgt_ymin - self._spec_ymin, 0.0)
+        self._y_shrink_step_ymax = dy_max / self._y_shrink_recover_updates
+        self._y_shrink_step_ymin = dy_min / self._y_shrink_recover_updates
+        self._y_shrink_active = True
+
+    def _update_spec_ylim(self, y_ref: np.ndarray) -> None:
+        if self._spec_y_lim is not None:
+            return
+
+        y_min = float(np.min(y_ref))
+        y_max = float(np.max(y_ref))
+
+        # target window (always from current data span)
+        data_span = max(y_max - y_min, 1e-12)
+        guard = self._y_guard_frac * data_span
+        tgt_ymin = y_min - guard
+        tgt_ymax = y_max + guard
+
+        if not self._spec_ylim_inited:
+            self._spec_ymin = tgt_ymin
+            self._spec_ymax = tgt_ymax
+            self._spec_ylim_inited = True
+            self._shrink_reset()
+            self.ax_spec.set_ylim(self._spec_ymin, self._spec_ymax)
+            return
+
+        expanded = False
+
+        # expand-only (hysteresis)
+        if y_max > self._spec_ymax + self._spec_y_hyst_up:
+            self._spec_ymax = y_max + guard
+            expanded = True
+        if y_min < self._spec_ymin - self._spec_y_hyst_dn:
+            self._spec_ymin = y_min - guard
+            expanded = True
+
+        if expanded:
+            self._shrink_reset()
+        else:
+            # quiet detector (must be safely inside window)
+            if (y_max < self._spec_ymax - self._y_shrink_margin_db) and (y_min > self._spec_ymin + self._y_shrink_margin_db):
+                self._y_quiet_updates += 1
+            else:
+                self._shrink_reset()
+
+            # arm shrink after hold
+            if (not self._y_shrink_active) and (self._y_quiet_updates >= self._y_shrink_hold_updates):
+                self._shrink_arm(tgt_ymin, tgt_ymax)
+
+            # apply shrink with fixed steps
+            if self._y_shrink_active:
+                if self._spec_ymax > tgt_ymax:
+                    step = max(self._y_shrink_step_ymax, 0.0)
+                    self._spec_ymax = max(tgt_ymax, self._spec_ymax - step)
+
+                if self._spec_ymin < tgt_ymin:
+                    step = max(self._y_shrink_step_ymin, 0.0)
+                    self._spec_ymin = min(tgt_ymin, self._spec_ymin + step)
+
+                # done?
+                if (self._spec_ymax <= tgt_ymax) and (self._spec_ymin >= tgt_ymin):
+                    self._shrink_reset()
+
+        self.ax_spec.set_ylim(self._spec_ymin, self._spec_ymax)
+
+    def update(
+        self,
+        spectr_arr: np.ndarray,
+        smoothed: Optional[np.ndarray] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        # RAW
+        self._line_raw_spec.set_ydata(spectr_arr)
+        y_ref = spectr_arr
+
+        # SMOOTH
+        if smoothed is None:
+            self._line_smooth_spec.set_visible(False)
+        else:
+            self._line_smooth_spec.set_ydata(smoothed)
+            self._line_smooth_spec.set_visible(True)
+
+        _title = self._base_title
+        if title:
+            _title += f"\n{title}"
+        self.ax_spec.set_title(_title)
+
+        self._update_spec_ylim(y_ref)
+
+        self.fig.canvas.draw_idle()
+        # keep UI responsive; external loop controls pacing
+        plt.pause(0.001)
 
 class VSA:
     def __init__(

@@ -83,9 +83,15 @@ def freq_swap(power: np.ndarray):
     power[:] = fftshift(power)
 
 
-def to_dbfs(power: np.ndarray,   p_fs: float = P_FS):
-    # P_FS -  full-scale power reference
-    np.maximum(power[:] / p_fs, 1e-30)
+def to_dbfs(power: np.ndarray, p_fs: float = P_FS) -> None:
+    """
+    Convert linear power to dBFS in-place.
+    0 dBFS == full-scale power (p_fs).
+    """
+    np.maximum(power, 1e-30, out=power)
+    np.divide(power, p_fs, out=power)
+    np.log10(power, out=power)
+    np.multiply(power, 10.0, out=power)
 
 
 def build_power_spectr(samples_raw: IQInterleavedI16, f32_buf: IQInterleavedF32, x_c: np.ndarray[np.complex64], y_spec: np.ndarray[np.float32], fft_n: int) -> None:

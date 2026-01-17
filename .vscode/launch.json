@@ -2,6 +2,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "vsa_qt (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/vsa_qt.py",
+            "args": [],
+            "console": "integratedTerminal"
+        },
+        {
             "name": "vsa_file_entry (Python)",
             "type": "debugpy",
             "request": "launch",
