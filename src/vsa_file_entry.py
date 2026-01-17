@@ -6,7 +6,7 @@ import signal
 import sys
 import traceback
 from colorizer import colorize, inject_colors_into
-from file_stuff import FReader
+from io_stuff import FReader
 from vsa import do_vsa_file
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
@@ -137,6 +137,7 @@ if __name__ == "__main__":
         # show_cli()
         args = _build_cli().parse_args()
     else:
+        print(f"{WARN} USe dev defaults!")
         # _fpath = r""
         # samp_rate
         

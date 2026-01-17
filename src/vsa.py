@@ -1,20 +1,182 @@
-from typing import Literal, Optional, Tuple
+from typing import Final, Literal, Optional, Tuple
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.pyplot as plt
 
-from file_stuff import FReader, IQInterleavedF32, IQInterleavedI16, i16_to_f32
-
-
-INT16_FULL_SCALE = 32768.0
-COMPLEX_SCALING_FACTOR = 2.0
-P_FS = COMPLEX_SCALING_FACTOR * (INT16_FULL_SCALE ** 2)
+from fft_core import P_FS, IQInterleavedF32, IQInterleavedI16, i16_to_f32
+from io_stuff import FReader
 
 
 def get_scale_from_units(unit: Literal["M", "K"]) -> float:
     if unit == "K": return 1e-3
     if unit == "M": return 1e-6
     return 1
+
+class VSA_SPECTR:
+    def __init__(
+        self,
+        freqs: np.ndarray,
+        use_dbfs: bool,
+        freq_units: Literal["M", "K"] = "M",
+        spec_y_lim: Optional[Tuple[float, float]] = None,
+        spec_y_hyst_up: float = 3.0,
+        spec_y_hyst_dn: float = 3.0,
+        render_dt: float = 0.1,
+        title_base: Optional[str] = None,
+    ):
+        """
+        Spectrum visualization only. (raw + optional smoothed)
+        Render as Line2D (faster than bars).
+        """
+        self.freq_units = freq_units
+        self.freq_scale: float = get_scale_from_units(freq_units)
+
+        self.freqs = freqs
+        self.x_freq = self.freqs * self.freq_scale
+
+        self.dF = float(self.freqs[1] - self.freqs[0])
+        self._y_label_spec = "power (dBFS)" if use_dbfs else "magn (linear)"
+        self.use_dbfs = use_dbfs
+
+        self._base_title = title_base if title_base else (
+            f"SPECTRUM  FFT={len(freqs)}  |  dF={self.dF * self.freq_scale:.3f} {freq_units}Hz"
+        )
+
+        # Hard y-limits
+        self._spec_y_lim: Optional[Tuple[float, float]] = spec_y_lim
+
+        # Hysteresis for spectrum
+        self._spec_y_hyst_up = float(spec_y_hyst_up)
+        self._spec_y_hyst_dn = float(spec_y_hyst_dn)
+
+        # Guard fraction for y-limit updates
+        self._y_guard_frac = 0.10
+
+        # Render pacing
+        self.render_dt = float(render_dt)
+
+        # Spectrum y-scale state
+        self._spec_ylim_inited = False
+        self._spec_ymin = 0.0
+        self._spec_ymax = 0.0
+
+        # Control
+        self._stop = False
+        self.paused: bool = False
+        self._step_delta: int = 0
+
+        # Figure + subplot
+        self.fig, self.ax_spec = plt.subplots(figsize=(12, 6))
+        self.fig.canvas.mpl_connect("key_press_event", self._on_key)
+        self.fig.canvas.mpl_connect("close_event", self._on_figure_close)
+
+        # ===== SPECTRUM PANEL (Line2D) =====
+        (self._line_raw_spec,) = self.ax_spec.plot(
+            self.x_freq,
+            np.zeros_like(self.x_freq),
+            linestyle="-",
+            marker=".",
+            markersize=2.0,
+            linewidth=1.0,
+            color="orange",
+            zorder=2,
+        )
+
+        (self._line_smooth_spec,) = self.ax_spec.plot(
+            self.x_freq,
+            np.zeros_like(self.x_freq),
+            linestyle="-",
+            linewidth=1.0,
+            color="black",
+            zorder=3,
+        )
+        self._line_smooth_spec.set_visible(False)
+
+        self.ax_spec.set_xlabel(f"frequency ({freq_units}Hz)")
+        self.ax_spec.set_ylabel(self._y_label_spec)
+        self.ax_spec.set_title(self._base_title)
+        self.ax_spec.grid(True)
+
+        if self._spec_y_lim is not None:
+            self.ax_spec.set_ylim(self._spec_y_lim[0], self._spec_y_lim[1])
+
+        self.fig.tight_layout(pad=2)
+        self.fig.canvas.draw_idle()
+        plt.pause(0.001)
+
+    def _on_figure_close(self, ev) -> None:
+        print(f"[_ON_FIGURE_CLOSE] Figure closed by user", flush=True)
+        self._stop = True
+
+    def _on_key(self, ev) -> None:
+        print(f"[_ON_KEY] key={ev.key!r}", flush=True)
+        if ev.key == "escape":
+            self._stop = True
+            print(f"[_ON_KEY] pressed ESC (closing figure requested)", flush=True)
+            plt.close(self.fig)
+            self.fig = None
+
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop
+
+    def figure_alive(self) -> bool:
+        try:
+            return (self.fig is not None) and plt.fignum_exists(self.fig.number)
+        except Exception:
+            return False
+
+    def _update_spec_ylim(self, y_ref: np.ndarray) -> None:
+        if self._spec_y_lim is not None:
+            return
+
+        y_min = float(np.min(y_ref))
+        y_max = float(np.max(y_ref))
+
+        if not self._spec_ylim_inited:
+            span = max(y_max - y_min, 1e-12)
+            guard = self._y_guard_frac * span
+            self._spec_ymin = y_min - guard
+            self._spec_ymax = y_max + guard
+            self._spec_ylim_inited = True
+        else:
+            span = max(self._spec_ymax - self._spec_ymin, y_max - y_min, 1e-12)
+            guard = self._y_guard_frac * span
+
+            if y_max > self._spec_ymax + self._spec_y_hyst_up:
+                self._spec_ymax = y_max + guard
+            if y_min < self._spec_ymin - self._spec_y_hyst_dn:
+                self._spec_ymin = y_min - guard
+
+        self.ax_spec.set_ylim(self._spec_ymin, self._spec_ymax)
+
+    def update(
+        self,
+        spectr_arr: np.ndarray,
+        smoothed: Optional[np.ndarray] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        # RAW
+        self._line_raw_spec.set_ydata(spectr_arr)
+
+        # SMOOTH
+        if smoothed is None:
+            self._line_smooth_spec.set_visible(False)
+            y_ref = spectr_arr
+        else:
+            self._line_smooth_spec.set_ydata(smoothed)
+            self._line_smooth_spec.set_visible(True)
+            y_ref = smoothed
+
+        _title = self._base_title
+        if title:
+            _title += f"\n{title}"
+        self.ax_spec.set_title(_title)
+
+        self._update_spec_ylim(y_ref)
+
+        self.fig.canvas.draw_idle()
+        plt.pause(self.render_dt)
 
 
 class VSA:
@@ -318,6 +480,8 @@ class VSA:
         plt.pause(self.render_dt)
 
 
+
+
 def do_vsa_file(
     fr: FReader,
     Fs: float,
@@ -355,7 +519,7 @@ def do_vsa_file(
     fr.jump_to_pos(start_pos)
     n_iter = 0
 
-    def process_frame(on_update=None):
+    def _process_frame(on_update=None):
         """Process one frame: FFT for spectrum, extract I/Q for time-domain."""
         i16_to_f32(i16_buf, f32_buf, fft_n, normalize=False)
 
@@ -403,7 +567,7 @@ def do_vsa_file(
 
                 n_read = fr.read_samples_into(i16_buf, fft_n)
                 if n_read == fft_n:
-                    process_frame(on_update=update_callback)
+                    _process_frame(on_update=update_callback)
 
             plt.pause(vsa.render_dt)
             continue
@@ -413,9 +577,11 @@ def do_vsa_file(
             print(f"read {n_read} not match chunk {fft_n} : terminate...")
             break
 
-        process_frame(on_update=update_callback)
+        _process_frame(on_update=update_callback)
         n_iter += 1
         if step_samples is not None:
             fr.jump_to_pos(start_pos + step_samples * n_iter)
 
     print(f"[MAIN] do_vsa_file() exited cleanly", flush=True)
+
+
