@@ -117,7 +117,7 @@ class RingBuffer:
 # =====================================================
 # UDP Payload обробка
 # =====================================================
-def _proc_udp_payload(data: bytes, hdr_sz: int) -> Tuple[memoryview, memoryview, str]:
+def _proc_udp_payload(data: bytes, hdr_sz: int) -> Tuple[memoryview, Optional[memoryview], str]:
     """
     Обробка UDP payload: пропуск заголовка.
     Повертає в'ю (zero-copy), не копію.
@@ -132,16 +132,18 @@ def _proc_udp_payload(data: bytes, hdr_sz: int) -> Tuple[memoryview, memoryview,
     ts = "no header"
     if hdr_sz:
         ts = f"header {hdr_sz} B"
+        return memoryview(data)[hdr_sz:], None, ts
     return memoryview(data)[hdr_sz:], memoryview(data)[:hdr_sz], ts
 
-
+_HDR_SZ: Final = 8
 def do_sock_work(
     port: int,
     rd_timeout_ms: int = 750,
-    hdr_sz: int = 8,
-    pack_sz: int = 8192 + 8,
+    hdr_sz: int = _HDR_SZ,
+    pack_sz: int = 8192 + _HDR_SZ,
     Fs: float = 480e3,
-    Fc: float = 430e6,
+    # Fc: float = 430.1e6,
+    Fc: float = 423.85e6,
     fft_n: int = 256,
     fft_batch_depth : int = 128, # fft windows in batch
     sigma: float = 1.75,
@@ -171,8 +173,8 @@ def do_sock_work(
     batch_inp = np.empty(batch_len, dtype=np.complex64)
     scratch = np.empty((fft_batch_depth, fft_n), dtype=np.float32)
     tmp = np.empty(fft_n, dtype=np.float32)
-    power_db: ArrF32_1D = np.empty(fft_n, dtype=np.float32)      # linear power (NOT dB, NOT shifted)
-    acc_power_db: ArrF32_1D = np.empty(fft_n, dtype=np.float32)  # EMA buffer (same domain as power_db)
+    power: ArrF32_1D = np.empty(fft_n, dtype=np.float32)      # linear power (NOT dB, NOT shifted)
+    acc_power: ArrF32_1D = np.empty(fft_n, dtype=np.float32)  # EMA buffer (same domain as power_db)
     raw_iq_i16 = np.empty(need_raw, dtype=np.int16)
     i_f32 = np.empty(batch_len, dtype=np.float32)
     q_f32 = np.empty(batch_len, dtype=np.float32)
@@ -187,7 +189,7 @@ def do_sock_work(
             render_dt=0.0001,
             spec_y_lim=None,
             use_dbfs=True,
-            title_base=f"{fft_n=}  {fft_batch_depth=} dF={Fs/fft_n/1e3:.2f} KHz"
+            title_base=f"FC {int(round(Fc)):_} Hz  | {fft_n=}  {fft_batch_depth=} dF={Fs/fft_n/1e3:.2f} KHz"
         )
     else:
         vsa = None
@@ -240,15 +242,17 @@ def do_sock_work(
         payload, hdr, _ = _proc_udp_payload(pkt_buf, hdr_sz)
         if (len(payload) & 0x3) != 0:
             raise ValueError(f"Bad IQ payload size: {len(payload)} bytes (not multiple of 4)")
-        curr_num = int(np.frombuffer(hdr, dtype=np.int64, count=1)[0])
         raw = np.frombuffer(payload, dtype="<i2") # LE
-        if seq_num is not None:
-            gap = curr_num - seq_num
-            if gap > 1:
-                gap_count += 1
-                gap_len += gap
-                print(f"\n[DBG] {gap=} ({gap_count=}  {pkt_count:_})")
-        seq_num = curr_num
+        if hdr is not None:
+            curr_num = int(np.frombuffer(hdr, dtype=np.int64, count=1)[0])
+            if seq_num is not None:
+                gap = curr_num - seq_num
+                if gap > 1:
+                    gap_count += 1
+                    gap_len += gap
+                    print(f"\n[DBG] {gap=} ({gap_count=}  {pkt_count:_})")
+            seq_num = curr_num
+
         ring_buf.push_raw_data(raw, seq_num)
 
         if ring_buf.available() < need_raw:
@@ -264,18 +268,18 @@ def do_sock_work(
         batch_inp.imag = q_f32
 
         t_fft0 = perf_counter()
-        batch_fft(batch_inp, fft_n, fft_batch_depth, power_db, scratch, tmp, workers=-1)
+        batch_fft(batch_inp, fft_n, fft_batch_depth, power, scratch, tmp, workers=-1)
         t_fft1 = perf_counter()
         fft_time_acc += (t_fft1 - t_fft0)
         fft_calls += 1
         
         batches_processed = fft_calls
         if batches_processed == 1:
-            acc_power_db[:] = power_db
+            acc_power[:] = power
         else:
-            np.multiply(acc_power_db, (1.0 - ema_alpha), out=acc_power_db)
-            np.multiply(power_db, ema_alpha, out=tmp)
-            np.add(acc_power_db, tmp, out=acc_power_db)
+            np.multiply(acc_power, (1.0 - ema_alpha), out=acc_power)
+            np.multiply(power, ema_alpha, out=tmp)
+            np.add(acc_power, tmp, out=acc_power)
 
 
         stt_str = f"pkt={pkt_count:6_}  batches={batches_processed:6_}  gaps={gap_count:_} | "
@@ -317,9 +321,9 @@ def do_sock_work(
             t_next_render += render_period
             if t_next_render < t_now:
                 t_next_render = t_now + render_period
-            display_power_db = acc_power_db.copy()
-            freq_swap(display_power_db)
+            display_power_db = acc_power.copy()
             to_dbfs(display_power_db, p_fs=P_FS)
+            freq_swap(display_power_db)
             y_spec_smooth = gaussian_filter1d(display_power_db, sigma=sigma)
             time_str = "silence" if stream_start is None else f"uptime: {monotonic()-stream_start:4.1f} s | "
             stt_str = time_str  + stt_str
@@ -329,7 +333,7 @@ def do_sock_work(
                 rate = batch_duration*1e3 / avg_fft_ms
                 stt_str += f"batch_depth={fft_batch_depth} fft_avg_total: {avg_fft_ms:6.3f} ms  batch: {batch_duration*1e3:6.2f} ms  (x{rate:.2f})"
             vsa.update(display_power_db, y_spec_smooth, stt_str)
-            
+
     print(f"\n\nDone")
 
 if __name__ == '__main__':
