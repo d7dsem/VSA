@@ -8,6 +8,22 @@
             "program": "${workspaceFolder}/src/vsa_file_entry.py",
             "args": [],
             "console": "integratedTerminal"
-        }
+        },
+        {
+            "name": "vsa_sock_entry (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/vsa_socket.py",
+            "args": [],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Gen Stream (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/gen_test_stream.py",
+            "args": [],
+            "console": "integratedTerminal"
+        },
     ]
 }

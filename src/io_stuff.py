@@ -3,33 +3,18 @@
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, BinaryIO, TypeAlias
+from typing import Annotated, BinaryIO, Final, TypeAlias
 
 import numpy as np
 
+from fft_core import IQInterleavedF32, IQInterleavedI16
 from wav import WAVProps, get_iq_wav_prm, read_wav_header
 
-IQInterleavedI16: TypeAlias = Annotated[np.typing.NDArray[np.int16], "int16 LE 1D: i0 q0 i1 q1 ... (interleaved IQ)"]
-IQInterleavedF32: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 1D: i0 q0 i1 q1 ... (interleaved IQ)"]
 
-def i16_to_f32(
-        src: IQInterleavedI16,
-        dst: IQInterleavedF32,
-        n_iq: int,
-        normalize: bool = True
-    ) -> None:
-        """
-        Конвертує n_iq IQ-семплів з int16 у float32.
-        src: 1D int16  [i0 q0 i1 q1 ...]
-        dst: 1D float32[i0 q0 i1 q1 ...]
-        """
-        n = n_iq * 2  # кількість scalar-елементів
 
-        if normalize:
-            dst[:n] = src[:n].astype(np.float32) / 32768.0
-        else:
-            dst[:n] = src[:n].astype(np.float32)
-            
+SOCK_BUF_SZ: Final = 4 * 1024 * 1024
+
+           
 def validate_wav(f_wav: Path, Fs: float, wav_bps: int = 16, n_cnan: int = 2)->bool:
     props : WAVProps = read_wav_header(f_wav)
     if props["codec_tag"] != 0x0001: return False # PCM integer
