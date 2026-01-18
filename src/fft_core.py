@@ -84,7 +84,7 @@ def batch_fft(
 
 
 # --- frequency centering ---
-def freq_swap(power: np.ndarray):
+def swap_freq(power: np.ndarray):
     # power: np.ndarray(fft_n,), float32, preallocated)
     power[:] = fftshift(power)
 

@@ -59,13 +59,19 @@ def main_udp_stream(args: argparse.Namespace):
     
     payload_sz = args.size - _hdr_sz  
     iq_count = payload_sz // 4
+    n_int16 = iq_count * 2 
     if args.file:
         fr_args = argparse.Namespace(
             file=args.file,
             samp_rate=480e3
         )
         fr = FReader(fr_args)
-        iq_data: IQInterleavedI16 = np.empty(iq_count*2, dtype=np.int16)
+        samp_cnt = fr.samples_total
+        dur_s = fr.dur_sec
+        fp = Path(fr.f_path)
+        fsz = fp.stat().st_size
+        print(f"{fp.name}: {fsz=:_} Bytes   {samp_cnt:_} IQ samples  ({dur_s:.2f} s)")
+        iq_data: IQInterleavedI16 = np.empty(n_int16, dtype=np.int16)
     else:
         fr = None
     n_rounds = 0
@@ -74,10 +80,10 @@ def main_udp_stream(args: argparse.Namespace):
         seq_view[0] = seq_num
         
         if fr == None:
-            iq_data = np.random.randint(-24000, +24000, size=iq_count, dtype=np.int16)
+            iq_data = np.random.randint(-24000, +24000, size=n_int16, dtype=np.int16)
         else:
-            rd = fr.read_raw_into(iq_data, iq_count)
-            if rd != iq_count:
+            rd = fr.read_raw_into(iq_data, n_int16)
+            if rd != n_int16:
                 fr.jump_to_samp_pos(0)
                 n_rounds += 1
                 print(f"\n{n_rounds:2} Restart file!")
@@ -107,7 +113,7 @@ def main_udp_stream(args: argparse.Namespace):
 
         # apply delay if needed
         if delay_sec:
-            t_target = t_start + seq_num * delay_sec
+            t_target = t_start + pkt_count * delay_sec
             t_remaining = t_target - perf_counter()
 
             # sleep for bulk of delay, leave 1ms for busy-wait
@@ -165,9 +171,9 @@ if __name__ == '__main__':
             # file=Path(r"e:\home\d7\Public\signals\store\dmr-x310-480\08_02_2025\Fc_421000000Hz_ch_4_v2.bin"),
             file=Path(r"D:\C\Repo\signals_data\Fc_421000000Hz_ch_4_v1.bin"),
             size=8192+8,
-            spd_pkt=68_571//256,
+            spd_pkt=None, #68_571//256,
             spd_bit=None,
-            spd_byte=None
+            spd_byte=1_920_000
         )
 
     main_udp_stream(args)
