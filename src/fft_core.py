@@ -1,14 +1,20 @@
 # src\fft_core.py
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 import numpy as np
 from scipy.fft import fft, fftshift
+
+from io_stuff import ArrF32_1D, ArrF32_2D
 
 
 IQInterleavedI16: TypeAlias = Annotated[np.typing.NDArray[np.int16], "int16 LE 1D: i0 q0 i1 q1 ... (interleaved IQ)"]
 IQInterleavedF32: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 1D: i0 q0 i1 q1 ... (interleaved IQ)"]
 ArrC64: TypeAlias = Annotated[np.typing.NDArray[np.complex64],"1D C-contiguous, len == fft_batch*fft_n"]
-ArrF32_1D: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 1D C-contiguous"]
-ArrF32_2D: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 2D C-contiguous"]
+
+
+def get_scale_from_units(unit: Literal["M", "K"]) -> float:
+    if unit == "K": return 1e-3
+    if unit == "M": return 1e-6
+    return 1
 
 def i16_to_f32(
         src: IQInterleavedI16,

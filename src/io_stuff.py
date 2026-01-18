@@ -1,20 +1,20 @@
-
-
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
+import socket
 from typing import Annotated, BinaryIO, Final, TypeAlias
 
 import numpy as np
 
-from fft_core import IQInterleavedF32, IQInterleavedI16
+
 from wav import WAVProps, get_iq_wav_prm, read_wav_header
 
-
+ArrI16_1D: TypeAlias = Annotated[np.typing.NDArray[np.int16], "float32 1D C-contiguous"]
+ArrF32_1D: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 1D C-contiguous"]
+ArrF32_2D: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 2D C-contiguous"]
 
 SOCK_BUF_SZ: Final = 4 * 1024 * 1024
 
-           
 def validate_wav(f_wav: Path, Fs: float, wav_bps: int = 16, n_cnan: int = 2)->bool:
     props : WAVProps = read_wav_header(f_wav)
     if props["codec_tag"] != 0x0001: return False # PCM integer
@@ -23,7 +23,14 @@ def validate_wav(f_wav: Path, Fs: float, wav_bps: int = 16, n_cnan: int = 2)->bo
     if props["bits_per_sample"] != wav_bps: return False
     return True
 
+def create_socket(port: int, rd_timeout_ms: int, sock_buf_sz: int = SOCK_BUF_SZ):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("0.0.0.0", port))
+    s.settimeout(rd_timeout_ms / 1000.0)
 
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, sock_buf_sz)
+    return s
+    
 class FReader:
     def __init__(self, args: Namespace):
         f_path: Path = args.file
@@ -49,7 +56,7 @@ class FReader:
             self.samples_total = f_sz // 4
             self.dur_sec = self.samples_total / self.Fs
 
-        # current sample position = sample index at the beginning of the last read block
+        # current sample position = sample index at the beginning of the last read block - use DSP domain semantic - IQ int16 pair. Meta info, not for navigation!
         self.curr_sampl_pos: int = 0
 
         _FILE_BUFF_SZ = 4 * 1024**2  # practical approach
@@ -64,11 +71,10 @@ class FReader:
         if self._file:
             self._file.close()
 
-    def read_samples_into(self, arr_int: IQInterleavedI16, samp_count: int) -> int:
+    def read_raw_into(self, arr_int: ArrI16_1D, el_count: int) -> int:
         """
-        Reads samp_count IQ samples into 1D raw int16 buffer:
-        i0 q0 i1 q1 ...
-        Returns actual number of IQ samples read.
+        Reads el_count int16 into 1D raw buffer. Read iq samples require el_count = 2 * samp_count.
+        Returns actual number of elements read.
 
         Side effect:
         - curr_sampl_pos is set to the IQ-sample index at the beginning of this read block.
@@ -77,7 +83,7 @@ class FReader:
         byte_offs = self._file.tell() - self._hdr_sz
         self.curr_sampl_pos = byte_offs // 4
 
-        n_i16_req = samp_count * 2
+        n_i16_req = el_count
         raw = self._file.read(n_i16_req * 2)
         if not raw:
             return 0
@@ -85,11 +91,12 @@ class FReader:
         n_i16_read = len(raw) // 2
         data = np.frombuffer(raw, dtype="<i2", count=n_i16_read)
         arr_int[:n_i16_read] = data
-        return n_i16_read // 2
+        return n_i16_read
 
-    def jump_to_pos(self, sample_pos: int) -> None:
+    def jump_to_samp_pos(self, sample_pos: int) -> None:
         """
         Jump to absolute position in IQ samples (I/Q pairs).
+        (In domain semantic)
         """
         if sample_pos < 0 or sample_pos >= self.samples_total:
             raise RuntimeError(
