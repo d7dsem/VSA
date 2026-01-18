@@ -47,7 +47,7 @@ def main_udp_stream(args: argparse.Namespace):
     # open udp sock and connect to dest ip:port
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)  # 1 MB
-    # Does not allow localhost conn to on Liunux w/o stream consumer
+    # Note: on Liunux does not allow localhost conn to dst w/o stream consumer
     # sock.connect((host, port))
 
     seq_num = 0
@@ -76,9 +76,9 @@ def main_udp_stream(args: argparse.Namespace):
         if fr == None:
             iq_data = np.random.randint(-24000, +24000, size=iq_count, dtype=np.int16)
         else:
-            rd = fr.read_samples_into(iq_data, iq_count)
+            rd = fr.read_raw_into(iq_data, iq_count)
             if rd != iq_count:
-                fr.jump_to_pos(0)
+                fr.jump_to_samp_pos(0)
                 n_rounds += 1
                 print(f"\n{n_rounds:2} Restart file!")
         
@@ -162,7 +162,8 @@ if __name__ == '__main__':
         args = argparse.Namespace(
             dur_sec=None,     # inf send loop
             addr="127.0.0.1:9999",
-            file=Path(r"e:\home\d7\Public\signals\store\dmr-x310-480\08_02_2025\Fc_421000000Hz_ch_4_v2.bin"),
+            # file=Path(r"e:\home\d7\Public\signals\store\dmr-x310-480\08_02_2025\Fc_421000000Hz_ch_4_v2.bin"),
+            file=Path(r"D:\C\Repo\signals_data\Fc_421000000Hz_ch_4_v1.bin"),
             size=8192+8,
             spd_pkt=68_571//256,
             spd_bit=None,

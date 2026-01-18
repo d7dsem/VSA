@@ -79,7 +79,6 @@ def _build_cli() -> argparse.ArgumentParser:
 
     return p
 
-
 def _apply_vsa_sock_contract(args: argparse.Namespace) -> argparse.Namespace:
     """
     Contract enforcement (no guessing):

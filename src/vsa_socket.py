@@ -5,142 +5,16 @@ from matplotlib import pyplot as plt
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from fft_core import ArrF32_1D, batch_fft, freq_swap, to_dbfs
-from io_stuff import SOCK_BUF_SZ, IQInterleavedI16
+from fft_core import ArrF32_1D, batch_fft, freq_swap, to_dbfs, IQInterleavedI16
+from io_stuff import SOCK_BUF_SZ, create_socket
 from vsa import P_FS, VSA_SPECTR
+from data_layer import HDR_SZ, RingBuffer, proc_udp_payload
 
-
-class RingBuffer:
-    """
-    Циклічний буфер для накопичення int16 даних без переалокацій.
-    Архітектура:
-    - Основний буфер: int16 дані (циклічний write_pos/read_pos)
-    """
-    
-    def __init__(self, el_count: int):
-        self.buffer = np.empty(el_count, dtype=np.int16)
-        self.el_count = el_count
-        self.write_pos = 0
-        self.read_pos = 0
-        self.el_available = 0
-        self.overrun_events = 0          # скільки разів сталося переповнення
-        self.overrun_raw_dropped = 0     # скільки int16 елементів "випало" сумарно
-        
-    def push_raw_data(self, data: IQInterleavedI16, seq_n: Optional[int]=None) -> int:
-        """
-        Додаємо IQInterleavedI16 дані
-        Args:
-            data: IQInterleavedI16 (memoryview або np.ndarray з int16)
-            seq_n: seq_num пакету (опціонально)
-        Returns:
-            кількість доданих елементів (int16)
-        """
-        count: int = len(data)
-        free = self.el_count - self.el_available
-        if count > free:
-            drop = count - free
-            self.overrun_events += 1
-            self.overrun_raw_dropped += drop
-
-            # advance read_pos to discard oldest `drop` elements
-            self.read_pos = (self.read_pos + drop) % self.el_count
-            self.el_available -= drop
-        # Записуємо дані в основний буфер
-        if self.write_pos + count <= self.el_count:
-            self.buffer[self.write_pos:self.write_pos + count] = data[:count]
-        else:
-            first_chunk = self.el_count - self.write_pos
-            self.buffer[self.write_pos:] = data[:first_chunk]
-            self.buffer[:count - first_chunk] = data[first_chunk:count]
-        
-        # Обюробляємо seq_num (додам пізніше)
-        if seq_n is not None:
-            ...
-        self.write_pos = (self.write_pos + count) % self.el_count
-        self.el_available = min(self.el_available + count, self.el_count)
-        return count
-    
-    def pop_raw_data(self, count: int) -> Optional[IQInterleavedI16]:
-        """
-        Повертає count int16 елементів (або всі наявні).
-        """
-        if self.el_available == 0:
-            return None
-        count = min(count, self.el_available)
-        out = np.empty(count, dtype=np.int16)
-        
-        # Читаємо дані з циклічного буфера
-        if self.read_pos + count <= self.el_count:
-            out[:] = self.buffer[self.read_pos:self.read_pos + count]
-        else:
-            first_chunk = self.el_count - self.read_pos
-            out[:first_chunk] = self.buffer[self.read_pos:]
-            out[first_chunk:] = self.buffer[:count - first_chunk]
-        self.read_pos = (self.read_pos + count) % self.el_count
-        self.el_available -= count
-        return out
-
-    def pop_into(self, out: IQInterleavedI16) -> int:
-        """
-        Заповнює out даними з рінга.
-        Returns: скільки int16 реально записано (0 якщо нема даних)
-        """
-        if self.el_available == 0:
-            return 0
-
-        count = min(len(out), self.el_available)
-
-        if self.read_pos + count <= self.el_count:
-            out[:count] = self.buffer[self.read_pos:self.read_pos + count]
-        else:
-            first_chunk = self.el_count - self.read_pos
-            out[:first_chunk] = self.buffer[self.read_pos:]
-            out[first_chunk:count] = self.buffer[:count - first_chunk]
-
-        self.read_pos = (self.read_pos + count) % self.el_count
-        self.el_available -= count
-        return count
-
-    def read_samples(self, samp_count: int) -> Optional[IQInterleavedI16]:
-        """
-        Domain semantic. Wrapper over pop_raw_data
-        Читаємо samp_count IQ пар.
-        sample is 2x raw
-        """
-        raw_count = samp_count * 2
-        return self.pop_raw_data(raw_count)
-    
-    def available(self) -> int:
-        """Скільки raw int16 елементів доступно"""
-        return self.el_available
-
-# =====================================================
-# UDP Payload обробка
-# =====================================================
-def _proc_udp_payload(data: bytes, hdr_sz: int) -> Tuple[memoryview, Optional[memoryview], str]:
-    """
-    Обробка UDP payload: пропуск заголовка.
-    Повертає в'ю (zero-copy), не копію.
-    
-    Args:
-        data: bytes дані пакету
-        hdr_sz: розмір заголовка
-        
-    Returns:
-        (memoryview без заголовка, рядок для діагностики)
-    """
-    ts = "no header"
-    if hdr_sz:
-        ts = f"header {hdr_sz} B"
-        return memoryview(data)[hdr_sz:], None, ts
-    return memoryview(data)[hdr_sz:], memoryview(data)[:hdr_sz], ts
-
-_HDR_SZ: Final = 8
 def do_sock_work(
     port: int,
     rd_timeout_ms: int = 750,
-    hdr_sz: int = _HDR_SZ,
-    pack_sz: int = 8192 + _HDR_SZ,
+    hdr_sz: int = HDR_SZ,
+    pack_sz: int = 8192 + HDR_SZ,
     Fs: float = 480e3,
     # Fc: float = 430.1e6,
     Fc: float = 423.85e6,
@@ -152,11 +26,8 @@ def do_sock_work(
     draw_every: int = 100,
     vsa_on: bool = True
 ) -> None:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("0.0.0.0", port))
-    s.settimeout(rd_timeout_ms / 1000.0)
 
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCK_BUF_SZ)
+    s = create_socket(port, rd_timeout_ms)
     print(f"[do_vsa_socket] listening on port {port}", flush=True)
     print(f"[do_vsa_socket] {pack_sz=:_}, {hdr_sz=}", flush=True)
     
@@ -239,7 +110,7 @@ def do_sock_work(
                     t_next_show = t_cur + show_silence_every_sec
             continue
         pkt_count += 1
-        payload, hdr, _ = _proc_udp_payload(pkt_buf, hdr_sz)
+        payload, hdr = proc_udp_payload(pkt_buf, hdr_sz)
         if (len(payload) & 0x3) != 0:
             raise ValueError(f"Bad IQ payload size: {len(payload)} bytes (not multiple of 4)")
         raw = np.frombuffer(payload, dtype="<i2") # LE
