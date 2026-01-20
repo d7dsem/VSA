@@ -1,6 +1,6 @@
 # VSA-file
 
-VSA-file is a specialized tool for spectral analysis and visualization of IQ recordings. It is a command-line tool that uses `matplotlib` and `numpy` to perform and visualize the analysis.
+VSA-file is a specialized tool for spectral analysis and visualization of IQ recordings. It is a command-line tool that uses `matplotlib`/`qt` and `numpy` to perform and visualize the analysis.
 
 ## Features
 
