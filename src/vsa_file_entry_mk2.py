@@ -73,11 +73,12 @@ samp_rate = None
 
 
 Fc = 450000000
-freq_wnd: Tuple[float, float] = (449.5e6, 449.9e6) # None
+freq_wnd: Tuple[float, float] = None # (449.5e6, 449.9e6)
 alpha = 0.01
 sigma = 4.0
 fft_n = 1024
 batch_n = 8
+p_val = 12
 step = fft_n * batch_n
 def do_vsa_file(
     fr: FReader,
@@ -85,16 +86,14 @@ def do_vsa_file(
     Fc: float = Fc,
     fft_n: int = fft_n,
     freq_wnd: Optional[Tuple[float, float]] = freq_wnd,
-    spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'rect',
+    spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'hann',
     
     start_pos: int = 1_500_000,
     batch_n: int = batch_n,
     step_samples: Optional[int] = step,
 
-
     sigma: Optional[float] = sigma,
-    alpha: Optional[float] = alpha,
-        
+    p_val: Optional[int] = p_val,
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
     render_dt: float = 0.001,
 ) -> None:
@@ -159,6 +158,11 @@ def do_vsa_file(
             P_shifted = np.fft.fftshift(P_linear)
             y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
             
+            if p_val:
+                noise_floor = np.percentile(y_spec, p_val)
+                h_coords=np.array([noise_floor])
+            else:
+                h_coords = None
             # 5. Згладжування
             y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
 
@@ -177,7 +181,11 @@ def do_vsa_file(
             # Отримуємо частоти для v_lines
             peak_freqs = freq_bins_view[peaks_idx]
             if _update:
-                _update(y_masked, y_smooth_masked, f" {fr.progress_str()}", v_coords=peak_freqs)
+                _update(y_masked, y_smooth_masked, f" {fr.progress_str()}",
+                        v_coords=peak_freqs,
+                        h_coords=h_coords
+                )
+                
                 
     while True:
         if vsa.stop_requested:

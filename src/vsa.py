@@ -37,7 +37,10 @@ class D7Figure:
     _left_req: bool = False
     _right_req: bool = False
     _step_delta: int = 0
-
+    _reset_peaks_req: bool = False
+    _peak_hold_toggle_req: bool = False
+    
+    
     def __post_init__(self):
         """Автоматично підключаємо події після створення об'єкта."""
         self.fig.canvas.mpl_connect("key_press_event", self._on_key)
@@ -57,7 +60,10 @@ class D7Figure:
             case "left":
                 if self._paused:
                     self._step_delta -= 1
-
+            case "r" | "к": # підтримка обох розкладок
+                self._reset_peaks_req = True
+            case "h" | "р": # клавіша 'h' для перемикання (укр. 'р')
+                self._peak_hold_toggle_req = True
 
 def deploy_layout() -> Tuple[D7Figure, Axes, Axes, Axes]:
     # Створюємо фігуру
@@ -185,6 +191,20 @@ class SpecVidget:
         )
         self._line_smooth_spec.set_visible(False)
 
+        self.peak_hold_enabled = kwargs.get('peak_hold', False)
+        self._peak_hold_data = np.full_like(self.x_freq, -150.0) # Початкове значення нижче плінтуса
+        (self._line_peak_hold,) = self.ax_spec.plot(
+            self.x_freq,
+            self._peak_hold_data,
+            linestyle="-",
+            linewidth=1.0,
+            color="red",
+            alpha=0.6,
+            zorder=2,
+            label="Peak Hold",
+            visible=self.peak_hold_enabled
+        )
+
         # ===== AUX LINES (V-lines & H-lines) =====
         
         # Колекція для вертикальних ліній (наприклад, піки, межі каналів)
@@ -222,6 +242,10 @@ class SpecVidget:
     @property
     def stop_requested(self) -> bool:
         return self._stop
+
+    def reset_peak_hold(self):
+        """Метод для скидання піків (можна повісити на клавішу)"""
+        self._peak_hold_data[:] = -150.0
 
     def figure_alive(self) -> bool:
         try:
@@ -311,6 +335,8 @@ class SpecVidget:
             v_coords: Optional[np.ndarray] = None,  # Масив частот (x)
             h_coords: Optional[np.ndarray] = None   # Масив рівнів (y)
         ) -> None:
+            self._peak_hold_data = np.maximum(self._peak_hold_data, spectr_arr)
+            self._line_peak_hold.set_ydata(self._peak_hold_data)
             # 1. Оновлюємо капелюшки (точки)
             self._line_raw_spec.set_ydata(spectr_arr)
 
@@ -330,8 +356,7 @@ class SpecVidget:
             # Завантажуємо сегменти в колекцію
             self._stem_lines.set_segments(segments)
 
-            # --- Далі йде твоя стандартна логіка ---
-            # RAW y_ref для шкалювання
+
             y_ref = spectr_arr
 
             # SMOOTH
@@ -394,6 +419,18 @@ class SpecVidget:
 
             # Оновлення ГОРИЗОНТАЛЬНИХ ліній (h_lines)
             if h_coords is not None and len(h_coords) > 0:
+                for txt in self._h_texts:
+                    txt.remove()
+                self._h_texts.clear()
+                x_pos = self.x_freq[-1] # Текст буде біля правого краю
+                for val in h_coords:
+                    t = self.ax_spec.text(
+                        x_pos, val, f"{val:.1f}", 
+                        color='green', fontsize=12, 
+                        verticalalignment='bottom', horizontalalignment='right',
+                        alpha=1.0
+                    )
+                    self._h_texts.append(t)
                 x_low = self.x_freq[0]
                 x_high = self.x_freq[-1]
                 # Кожна лінія: [(x_low, y), (x_high, y)]
@@ -405,6 +442,15 @@ class SpecVidget:
             else:
                 self._h_lines.set_segments([])
             
+            if self.peak_hold_enabled:
+                self._peak_hold_data = np.maximum(self._peak_hold_data, spectr_arr)
+                self._line_peak_hold.set_ydata(self._peak_hold_data)
+                if not self._line_peak_hold.get_visible():
+                    self._line_peak_hold.set_visible(True)
+            else:
+                if self._line_peak_hold.get_visible():
+                    self._line_peak_hold.set_visible(False)
+                    
             # Оновлюємо межі (тут якраз перераховується self._spec_ymin для наступного кадру)
             self._update_spec_ylim(y_ref)
 
@@ -507,5 +553,19 @@ class VSA:
 
     def update(self, spec, smooth=None, title="", **kwargs):
         if self.fig_alive:
+            # Обробка скидання піків (клавіша 'r')
+            if self.d7f._reset_peaks_req:
+                self.spec_w.reset_peak_hold()
+                self.d7f._reset_peaks_req = False
+            
+            # Обробка перемикання видимості (клавіша 'h')
+            if self.d7f._peak_hold_toggle_req:
+                self.spec_w.peak_hold_enabled = not self.spec_w.peak_hold_enabled
+                # Якщо вимкнули — скидаємо дані, щоб при увімкненні почати з чистого листа
+                if not self.spec_w.peak_hold_enabled:
+                    self.spec_w.reset_peak_hold()
+                self.d7f._peak_hold_toggle_req = False
+
             self.spec_w.update(spec, smooth, title, **kwargs)
-            if self.wfal_w: self.wfal_w.update(spec)
+            if self.wfal_w: 
+                self.wfal_w.update(spec)
