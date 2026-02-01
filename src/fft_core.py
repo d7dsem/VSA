@@ -16,6 +16,10 @@ def get_scale_from_units(unit: Literal["M", "K"]) -> float:
     if unit == "M": return 1e-6
     return 1
 
+INT16_FULL_SCALE: Final = 32768.0
+COMPLEX_SCALING_FACTOR: Final = 2.0
+P_FS: Final = COMPLEX_SCALING_FACTOR * (INT16_FULL_SCALE ** 2)
+
 def i16_to_f32(
         src: IQInterleavedI16,
         dst: IQInterleavedF32,
@@ -30,7 +34,7 @@ def i16_to_f32(
         n = n_iq * 2  # кількість scalar-елементів
 
         if normalize:
-            dst[:n] = src[:n].astype(np.float32) / 32768.0
+            dst[:n] = src[:n].astype(np.float32) / INT16_FULL_SCALE
         else:
             dst[:n] = src[:n].astype(np.float32)
  
@@ -39,9 +43,7 @@ def i16_to_f32(
 # FFT batch core
 # =====================================================
 
-INT16_FULL_SCALE: Final = 32768.0
-COMPLEX_SCALING_FACTOR: Final = 2.0
-P_FS: Final = COMPLEX_SCALING_FACTOR * (INT16_FULL_SCALE ** 2)
+
 
 def batch_fft(
     batch_inp: ArrC64,        # (fft_batch*fft_n,), complex64
