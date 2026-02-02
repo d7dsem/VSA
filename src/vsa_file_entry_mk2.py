@@ -102,6 +102,7 @@ def do_vsa_file(
     min_bw: float = 1.25e6, # Minimal bw
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
     render_dt: float = 0.001,
+    no_plot: bool = True
 ) -> None:
     """
     Process IQ file.
@@ -125,16 +126,20 @@ def do_vsa_file(
     dF = Fs/fft_n
     dur_ms = 1e3 * batch_n*fft_n / Fs
     title_base = f"File: {fr.f_path.stem} | SR: {Fs/1e6} MHz | {batch_n=}, {fft_n=:_} {dur_ms=:.3f} | dF: {dF/1e3} KHz |"
-    d7fg, ax_spec, ax_wfall, ax_side = deploy_layout()
     
-    cmap_name: CMapType = 'inferno' # type: ignore
-    vsa: ControledVidget = VSA(
-        freq_bins_view, d7fg, ax_spec, ax_wfall, ax_side,
-        render_dt=render_dt,
-        spec_y_lim=spec_y_lim,
-        cmap_name=cmap_name,
-        title_base = title_base,
-    )
+    if not no_plot:
+        d7fg, ax_spec, ax_wfall, ax_side = deploy_layout()
+        
+        cmap_name: CMapType = 'inferno' # type: ignore
+        vsa: ControledVidget = VSA(
+            freq_bins_view, d7fg, ax_spec, ax_wfall, ax_side,
+            render_dt=render_dt,
+            spec_y_lim=spec_y_lim,
+            cmap_name=cmap_name,
+            title_base = title_base,
+        ) 
+    else:
+        vsa = None
 
     fr.jump_to_samp_pos(start_pos)
     n_iter = 0
@@ -222,15 +227,15 @@ def do_vsa_file(
 
     bands_lst:List[Bandwidt] = []
     while True:
-        if vsa.stop_requested:
+        if vsa and vsa.stop_requested:
             print(f"[MAIN] stop_requested=True: terminating...", flush=True)
             break
 
-        if not vsa.fig_alive:
+        if vsa and not vsa.fig_alive:
             print(f"[MAIN] figure closed: terminating...", flush=True)
             break
 
-        if vsa.paused:
+        if vsa and vsa.paused:
             delta = vsa.delta
             if delta != 0:
                 new_pos = fr.curr_sampl_pos + delta * step_samples
@@ -247,13 +252,16 @@ def do_vsa_file(
             print(f"read {n_read} not match chunk {fft_n}x{batch_n}x2 : terminate...")
             break
         # _process_frame(_update=vsa.update)
-        has_sign, occ, bnd_lst = _process_frame(_update=vsa.update)
+        has_sign, occ, bnd_lst = _process_frame(_update=vsa.update if vsa else None )
         for bnd in bnd_lst: bnd.samp_pos = fr.curr_sampl_pos
         if has_sign and occ*Fs > min_bw: bands_lst.extend(bnd_lst)
         n_iter += 1
+        if no_plot and n_iter%1_000==0:
+            prcnt = 100.0 * fr.curr_sampl_pos / fr.samples_total
+            print(f"{prcnt:.2f}% {n_iter=:_}  {fr.curr_sampl_pos:_} {fr.samples_total:_}", end="\r")
         if step_samples is not None:
             fr.jump_to_samp_pos(start_pos + step_samples * n_iter)
-
+    if no_plot: print()
     print(f"[MAIN] do_vsa_file() exited cleanly", flush=True)
 
     print(f"\n[FINAL] Analysis Complete.")
