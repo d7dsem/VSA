@@ -40,7 +40,7 @@ from scipy.signal import find_peaks
 
 from colorizer import colorize, inject_colors_into
 
-from helpers import Bandwidt, analyze_and_export_bands, find_bands
+from helpers import Bandwidt, analyze_and_export_bands, find_bands, reanalyze_csv
 from io_stuff import FReader
 from vsa import VSA, CMapType, ControledVidget, deploy_layout
 # from vsa import VSA
@@ -385,7 +385,7 @@ if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
     signal.signal(signal.SIGINT, handle_sigint)
-
+    # reanalyze_csv(r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant_20260202_225227.csv ", 10e6)
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
         # show_cli()
@@ -404,7 +404,9 @@ if __name__ == "__main__":
         )
         
     try:
+        
         args = _apply_vsa_file_contract(args)
+        
         with FReader(args) as fr:
             Fs=args.samp_rate
             print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={Fs/1e3} KHz")
