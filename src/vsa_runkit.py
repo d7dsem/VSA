@@ -10,7 +10,7 @@ from PySide6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from data_layer import ParamsDSP, ParamsStreamUDP, do_hard_work
-from fft_core import swap_freq, to_dbfs
+from fft_core import P_FS_NORM, P_FS_RAW, swap_freq, to_dbfs
 
 from PySide6.QtGui import QColor
 import pyqtgraph as pg
@@ -56,11 +56,11 @@ class Worker(QtCore.QObject):
     def _on_spectrum(self, raw: np.ndarray, ema: Optional[np.ndarray], meta: Dict) -> None:
         with self._shared.lock:
             spec = raw.copy()
-            to_dbfs(spec)
+            to_dbfs(spec, p_fs=P_FS_RAW)
             swap_freq(spec)
             if ema is not None:
                 ema_spec = ema.copy()
-                to_dbfs(ema_spec)
+                to_dbfs(ema_spec, p_fs=P_FS_RAW)
                 swap_freq(ema_spec)
             else:
                 ema_spec = None

@@ -2,12 +2,25 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "vsa scaff OFDM (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/vsa_scaff_ofdm.py",
+            "args": [
+                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1340000000Hz_13-23-48_22-01-2026.wav"
+                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1340000000Hz_13-50-16_22-01-2026.wav"
+                // "-i", "e:/home/d7/Public/signals/OFDM\baseband_1340000000Hz_13-51-21_22-01-2026.wav"
+            ],
+            // "python": "d:\\Python\\Python3.13\\python.exe",
+            "console": "integratedTerminal"
+        },
+        {
             "name": "vsa_qt (Python)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/vsa_qt.py",
             "args": [],
-            "python": "d:\\Python\\Python3.13\\python.exe",
+            // "python": "d:\\Python\\Python3.13\\python.exe",
             "console": "integratedTerminal"
         },
         {
@@ -15,8 +28,14 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/vsa_file_entry.py",
-            "args": [],
-            "python": "d:\\Python\\Python3.13\\python.exe",
+            "args": [
+                // "-i", "e:\\home\\d7\\Public\\signals\\OFDM\\5MHz-11-14-25.bin",
+                // "--samp-rate", "10000000"
+
+                "-i", "e:\\home\\d7\\Public\\signals\\OFDM\\ofdm_test.bin",
+                "--samp-rate", "8000000"
+            ],
+            //"python": "d:\\Python\\Python3.13\\python.exe",
             // "guiEventLoop": "none",
             "console": "integratedTerminal"
         },
@@ -26,7 +45,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/vsa_socket.py",
             "args": [],
-            "python": "d:\\Python\\Python3.13\\python.exe",
+            //"python": "d:\\Python\\Python3.13\\python.exe",
             "console": "integratedTerminal"
         },
         {
@@ -35,7 +54,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/gen_test_stream.py",
             "args": [],
-            "python": "d:\\Python\\Python3.13\\python.exe",
+            //"python": "d:\\Python\\Python3.13\\python.exe",
             "console": "integratedTerminal"
         },
     ]

@@ -25,8 +25,6 @@ _dev_default_dsp = ParamsDSP(
     ema_alpha=0.1
 )
 
-
-
 class Worker(QtCore.QObject):
     """
     Qt wrapper for thread start of do_hard_work
