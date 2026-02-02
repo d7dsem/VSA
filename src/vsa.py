@@ -67,7 +67,7 @@ class D7Figure:
 
 def deploy_layout() -> Tuple[D7Figure, Axes, Axes, Axes]:
     # Створюємо фігуру
-    fig = plt.figure(figsize=(14, 9)) # Трохи ширша для панелі
+    fig = plt.figure(figsize=(12, 8)) # Трохи ширша для панелі
     
     # Створюємо сітку: 2 рядки, 2 колонки
     # Колонки: 95% під графіки, 5% під Colorbar/Контролі
@@ -526,7 +526,7 @@ class VSA:
                 freq_bins, 
                 freq_units=kwargs.get('freq_units', "M"),
                 ax_cbar=ax_cbar,
-                history_len=kwargs.get('history_len', 100),
+                history_len=kwargs.get('history_len', 512),
                 cmap_name=kwargs.get('cmap_name', 'viridis')
             ) if ax_wfall else None
             

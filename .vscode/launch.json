@@ -8,8 +8,10 @@
             "program": "${workspaceFolder}/src/vsa_file_entry_mk2.py",
             "args": [
                 
+                "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+
                 // SSK records
-                "-i", "E:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026.wav",
+                // "-i", "E:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026.wav",
                 // "-i", "e:/home/d7/Public/signals/OFDM/stripped/baseband_1331012500Hz_16-46-58_02-02-2026_1ant_1burst.wav",
                 // "--samp-rate", "6e6",
                 // "-i", "e:/home/d7/Public/signals/OFDM/fout1330range2_1.bin", 
