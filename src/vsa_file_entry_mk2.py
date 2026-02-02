@@ -29,7 +29,7 @@ import argparse
 from pathlib import Path
 import signal
 import traceback
-from typing import Annotated, Final, Literal, Optional, Tuple, TypeAlias
+from typing import Annotated, Final, List, Literal, Optional, Tuple, TypeAlias
 from matplotlib import pyplot as plt
 import numpy as np
 
@@ -40,6 +40,7 @@ from scipy.signal import find_peaks
 
 from colorizer import colorize, inject_colors_into
 
+from helpers import Bandwidt, analyze_and_export_bands, find_bands
 from io_stuff import FReader
 from vsa import VSA, CMapType, ControledVidget, deploy_layout
 # from vsa import VSA
@@ -96,7 +97,9 @@ def do_vsa_file(
     step_samples: Optional[int] = step,
 
     sigma: Optional[float] = sigma,
-    p_val: Optional[int] = p_val,  # noise floor percentile
+    # p_val: Optional[int] = p_val,  # noise floor percentile
+    threshold_iqr: float = 10.0, # Interquartile Range singal presence thr, dB
+    min_bw: float = 1.25e6, # Minimal bw
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
     render_dt: float = 0.001,
 ) -> None:
@@ -123,6 +126,7 @@ def do_vsa_file(
     dur_ms = 1e3 * batch_n*fft_n / Fs
     title_base = f"File: {fr.f_path.stem} | SR: {Fs/1e6} MHz | {batch_n=}, {fft_n=:_} {dur_ms=:.3f} | dF: {dF/1e3} KHz |"
     d7fg, ax_spec, ax_wfall, ax_side = deploy_layout()
+    
     cmap_name: CMapType = 'inferno' # type: ignore
     vsa: ControledVidget = VSA(
         freq_bins_view, d7fg, ax_spec, ax_wfall, ax_side,
@@ -135,7 +139,6 @@ def do_vsa_file(
     fr.jump_to_samp_pos(start_pos)
     n_iter = 0
 
-
     _P_FS = float(fft_n)**2  # Константа для 0 dBFS (максимальна потужність комплексного тону)
     # INT16_FULL_SCALE == 32768
     if spec_windowing == 'rect':
@@ -145,53 +148,79 @@ def do_vsa_file(
         # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
         wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
 
-    def _process_frame(_update=None):
-            # 1. Вікнування (Broadcasting)
-            obs = (f32_buf[0::2].reshape(batch_n, fft_n) + 
-                1j * f32_buf[1::2].reshape(batch_n, fft_n)) * wnd_coeffs
+    def _process_frame(_update=None)->Tuple[bool, float, List[Bandwidt]]:
+        # Returns has_signal and occupance
+        # 1. Вікнування (Broadcasting)
+        obs = (f32_buf[0::2].reshape(batch_n, fft_n) + 
+            1j * f32_buf[1::2].reshape(batch_n, fft_n)) * wnd_coeffs
 
-            # 2. Scipy FFT (Пакетне)
-            
-            X = sfft(obs, axis=1)
+        # 2. Scipy FFT (Пакетне)
+        
+        X = sfft(obs, axis=1)
 
-            # 3. Потужність БЕЗ кореня (X * conj(X))
-            # Метод .real тут безпечний, бо результат множення комплексного на спряжене 
-            # завжди суто дійсний, але NumPy може залишити тип complex.
-            P_linear = np.mean((X * X.conj()).real, axis=0)
+        # 3. Потужність БЕЗ кореня (X * conj(X))
+        # Метод .real тут безпечний, бо результат множення комплексного на спряжене 
+        # завжди суто дійсний, але NumPy може залишити тип complex.
+        P_linear = np.mean((X * X.conj()).real, axis=0)
+        
+        # 4. Центрування та логарифм
+        P_shifted = np.fft.fftshift(P_linear)
+        y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
+        y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
+        
+        p10 = np.percentile(y_spec, 10)
+        p75 = np.percentile(y_spec, 75)
+        iqr = p75 - p10
+        has_sign = iqr > threshold_iqr
+        v_lines = []
+        
+        if has_sign:
+            # --- РОЗРАХУНОК OCCUPANCE ---
+            # Визначаємо адаптивний поріг детектування сигналу. 
+            # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
+            thr_occupance = p75 + (0.5 * iqr) 
+            h_coords =[p10, p75, thr_occupance]
+            # Рахуємо кількість бінів, що перевищують цей поріг
+            active_bins = np.sum(y_spec > thr_occupance)
+            # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
+            occupance = active_bins / len(y_spec)
+            bnd_lst:List[Bandwidt] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
+            for bnd in bnd_lst:
+                v_lines.extend([bnd.f_start, bnd.center, bnd.f_end])
+        else:
+            noise_floor = np.percentile(y_spec, p_val)
+            occupance = 0.0
+            h_coords =[noise_floor]
+            thr_occupance = None
+            bnd_lst:List[Bandwidt] = []
             
-            # 4. Центрування та логарифм
-            P_shifted = np.fft.fftshift(P_linear)
-            y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
-            
-            if p_val:
-                noise_floor = np.percentile(y_spec, p_val)
-                h_coords=np.array([noise_floor])
-            else:
-                h_coords = None
-            # 5. Згладжування
-            y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
+        # ----------------------------
+        h_coords = np.array(h_coords)
+ 
+        y_masked = y_spec[mask]
+        y_smooth_masked = y_spec_smooth[mask]
+        
+        # 6. Виразний пошук піків
+        # distance: мінімальна відстань між піками в бінах (наприклад, 10 бінів)
+        # prominence: наскільки пік має виділятися над оточенням (наприклад, 5 dB)
+        # peaks_idx, _ = find_peaks(
+        #     y_smooth_masked, 
+        #     height=-70,       # Поріг (як і раніше)
+        #     distance=5,       # Не ліпити лінії занадто близько
+        #     prominence=3.0    # Відсікаємо дрібний шум
+        # )
+        # # Отримуємо частоти для v_lines
+        # peak_freqs = freq_bins_view[peaks_idx]
+        # v_lines.extend(peak_freqs)
 
-            y_masked = y_spec[mask]
-            y_smooth_masked = y_spec_smooth[mask]
-            
-            # 6. Виразний пошук піків
-            # distance: мінімальна відстань між піками в бінах (наприклад, 10 бінів)
-            # prominence: наскільки пік має виділятися над оточенням (наприклад, 5 dB)
-            peaks_idx, _ = find_peaks(
-                y_smooth_masked, 
-                height=-70,       # Поріг (як і раніше)
-                distance=5,       # Не ліпити лінії занадто близько
-                prominence=3.0    # Відсікаємо дрібний шум
+        if _update:
+            _update(y_masked, y_smooth_masked, f" {fr.progress_str()} | {has_sign=} occ={occupance*100:.2f}%",
+                    v_coords=np.array(v_lines),
+                    h_coords=np.array(h_coords)
             )
-            # Отримуємо частоти для v_lines
-            peak_freqs = freq_bins_view[peaks_idx]
-            if _update:
-                _update(y_masked, y_smooth_masked, f" {fr.progress_str()}",
-                        v_coords=peak_freqs,
-                        h_coords=h_coords
-                )
-                
-                
+        return has_sign, occupance, bnd_lst
+
+    bands_lst:List[Bandwidt] = []
     while True:
         if vsa.stop_requested:
             print(f"[MAIN] stop_requested=True: terminating...", flush=True)
@@ -217,12 +246,25 @@ def do_vsa_file(
         if n_read != chunk_len:
             print(f"read {n_read} not match chunk {fft_n}x{batch_n}x2 : terminate...")
             break
-        _process_frame(_update=vsa.update)
+        # _process_frame(_update=vsa.update)
+        has_sign, occ, bnd_lst = _process_frame(_update=vsa.update)
+        for bnd in bnd_lst: bnd.samp_pos = fr.curr_sampl_pos
+        if has_sign and occ*Fs > min_bw: bands_lst.extend(bnd_lst)
         n_iter += 1
         if step_samples is not None:
             fr.jump_to_samp_pos(start_pos + step_samples * n_iter)
 
     print(f"[MAIN] do_vsa_file() exited cleanly", flush=True)
+
+    print(f"\n[FINAL] Analysis Complete.")
+    print(f"Total iterations: {n_iter}")
+    print(f"Signals detected in {len(bands_lst)} frames.")
+
+    if bands_lst:
+       analyze_and_export_bands(bands_lst, Fs, base_filename=fr.f_path.stem)
+    else:
+        print("No signals matched your criteria (min_bw / threshold_iqr).")
+    
     # plt.pause(30)
 
 # CLI

@@ -370,51 +370,42 @@ class SpecVidget:
                 _title += f"\n{title}"
             self.ax_spec.set_title(_title)
 
-            # Оновлення ВЕРТИКАЛЬНИХ ліній (v_lines)
+            # Оновлення ВЕРТИКАЛЬНИХ ліній
             if v_coords is not None and len(v_coords) > 0:
                 v_coords_scaled = v_coords * self.freq_scale
                 y_low, y_high = self._spec_ymin, self._spec_ymax
                 
-                # 1. Малюємо лінії (твій існуючий код)
+                # Малюємо лінії (твоя векторизація - вогонь!)
                 v_segs = np.stack([
                     np.column_stack([v_coords_scaled, np.full_like(v_coords_scaled, y_low)]),
                     np.column_stack([v_coords_scaled, np.full_like(v_coords_scaled, y_high)])
                 ], axis=1)
                 self._v_lines.set_segments(v_segs)
 
-                # 2. ОНОВЛЮЄМО ПІДПИСИ
-                # Видаляємо старі тексти з графіка
-                for txt in self._v_texts:
-                    txt.remove()
-                self._v_texts.clear()
-
-                y_low, y_high = self._spec_ymin, self._spec_ymax
-                
-                # Робимо відступ від верхньої межі (наприклад, 2% від висоти вікна)
+                # --- ОНОВЛЮЄМО ПІДПИСИ (Senior style) ---
                 y_text_pos = y_high - (y_high - y_low) * 0.02
-                # trans = offset_copy(self.ax_spec.transData, fig=self.fig, x=4, units='points')
-                # trans = offset_copy(self.ax_spec.transData, fig=self.fig, x=-5, units='points')
-                for f_raw, f_scaled in zip(v_coords, v_coords_scaled):
-                    t = self.ax_spec.text(
-                        f_scaled, 
-                        y_text_pos, 
-                        f"{f_raw/1e6:.3f}", 
-                        # transform=trans,
-                        color='red', 
-                        fontsize=8, 
-                        # fontweight='bold',
-                        verticalalignment='top',   # Текст росте зверху вниз
-                        horizontalalignment='right',
-                        rotation=90, 
-                        alpha=0.9,
-                        # Додамо білу підкладку (bbox), щоб текст краще читали на фоні сітки
-                        bbox=dict(facecolor='white', alpha=0.5, edgecolor='none', pad=1)
-                    )
+                
+                # 1. Підганяємо кількість текстових об'єктів під кількість координат
+                while len(self._v_texts) < len(v_coords):
+                    t = self.ax_spec.text(0, 0, "", color='red', fontsize=8, rotation=90, 
+                                        verticalalignment='top', horizontalalignment='right',
+                                        bbox=dict(facecolor='white', alpha=0.5, edgecolor='none', pad=1))
                     self._v_texts.append(t)
+
+                # 2. Оновлюємо та показуємо потрібні, ховаємо зайві
+                for i, txt in enumerate(self._v_texts):
+                    if i < len(v_coords):
+                        f_raw = v_coords[i]
+                        f_scaled = v_coords_scaled[i]
+                        txt.set_text(f"{f_raw/1e6:.3f}")
+                        txt.set_position((f_scaled, y_text_pos))
+                        txt.set_visible(True)
+                    else:
+                        txt.set_visible(False)
             else:
                 self._v_lines.set_segments([])
-                for txt in self._v_texts: txt.remove()
-                self._v_texts.clear()
+                for txt in self._v_texts:
+                    txt.set_visible(False)
 
             # Оновлення ГОРИЗОНТАЛЬНИХ ліній (h_lines)
             if h_coords is not None and len(h_coords) > 0:
