@@ -157,6 +157,44 @@ def analyze_and_export_bands(bands: List[Bandwidt], fs: float, base_filename: st
 import pandas as pd
 import numpy as np
 
+def analyze_dwell_time(df, fs):
+    # 1. Визначаємо, коли частота змінилася
+    # Округляємо частоту до 100 кГц, щоб ігнорувати дрібний джиттер
+    df['freq_group'] = (df['center_hz'] / 1e5).round()
+    
+    # Створюємо ідентифікатор "сесії" (змінюється, коли змінюється частота)
+    df['session_id'] = (df['freq_group'] != df['freq_group'].shift()).cumsum()
+    
+    # 2. Групуємо за сесіями
+    sessions = df.groupby('session_id').agg({
+        'center_hz': 'first',
+        'sample_pos': ['count', 'min', 'max']
+    })
+    
+    sessions.columns = ['freq_hz', 'packets_count', 'start_samp', 'end_samp']
+    
+    # 3. Розраховуємо тривалість кожної сесії в мілісекундах
+    sessions['duration_ms'] = sessions['packets_count'] * (df['delta_ms'].median() if 'delta_ms' in df else 0)
+    # Або більш точно через позиції семплів:
+    # sessions['duration_ms'] = (sessions['end_samp'] - sessions['start_samp']) / fs * 1000
+
+    print("\n" + "="*50)
+    print(f"{'DWELL TIME ANALYSIS (Time per Frequency)':^50}")
+    print("="*50)
+    
+    # Статистика тривалості
+    print(f"Average Dwell Time: {sessions['duration_ms'].mean():.2f} ms")
+    print(f"Max Dwell Time:     {sessions['duration_ms'].max():.2f} ms")
+    print(f"Total Hops:         {len(sessions) - 1}")
+    
+    print("\nMost Frequent Session Durations (Top 5):")
+    top_durations = sessions['duration_ms'].round(1).value_counts().head(5)
+    for dur, count in top_durations.items():
+        print(f"  {dur:7.2f} ms | Occurrences: {count}")
+
+    print("="*50)
+    return sessions
+
 def reanalyze_csv(csv_path, fs):
     # 1. Завантажуємо дані
     print(f"Reading {csv_path}...")
@@ -166,39 +204,39 @@ def reanalyze_csv(csv_path, fs):
         print("File is empty.")
         return
 
-    # 2. Розрахунки (використовуємо векторні операції Pandas/NumPy)
-    # Часові дельти між пакетами в мс
+    # 2. Базові розрахунки
+    # Часові дельти між пакетами (важливо для Dwell Time)
     df['delta_ms'] = df['sample_pos'].diff() / fs * 1000
-    
-    # Стрибки частоти в МГц
+    # Стрибки частоти
     df['freq_hop_mhz'] = df['center_hz'].diff() / 1e6
     
-    # 3. Вивід основної статистики
+    # --- ВИКЛИК АНАЛІЗУ DWELL TIME ---
+    # Передаємо df, який вже має delta_ms
+    sessions_df = analyze_dwell_time(df, fs)
+    # ---------------------------------
+
+    # 3. Вивід основної статистики (як і раніше)
     print("\n" + "="*50)
-    print(f"RE-ANALYSIS REPORT for: {csv_path}")
+    print(f"GENERAL STATISTICS")
     print("="*50)
     print(f"Total packets:      {len(df)}")
     print(f"Avg Bandwidth:      {df['width_hz'].mean()/1e3:.2f} kHz")
     print(f"Freq range:         {df['center_hz'].min()/1e6:.2f} to {df['center_hz'].max()/1e6:.2f} MHz")
     
-    # Шукаємо найбільш імовірний період хопінгу (Mode)
     main_period = df['delta_ms'].round(1).mode()
     if not main_period.empty:
-        print(f"Main Hop Period:    {main_period[0]:.2f} ms")
+        print(f"Main Packet Period: {main_period[0]:.2f} ms")
     
-    # Шукаємо мінімальний крок сітки
     active_hops = df['freq_hop_mhz'].abs()
-    grid_step = active_hops[active_hops > 0.1].min() # ігноруємо дрібний джиттер
+    grid_step = active_hops[active_hops > 0.1].min()
     if not np.isnan(grid_step):
         print(f"Min Grid Step:      {grid_step:.3f} MHz")
 
-    # 4. Топ активних каналів
     print("\nTop 5 Channels (MHz):")
-    top_ch = df['center_hz'].round(-5).value_counts().head(5) # округлення до 100кГц
+    top_ch = df['center_hz'].round(-5).value_counts().head(5)
     for freq, count in top_ch.items():
         print(f"  {freq/1e6:8.3f} MHz | Hits: {count}")
     
     print("="*50)
-
-
-# reanalyze_csv("твій_файл.csv", Fs)
+    
+    return df, sessions_df # Повертаємо дані, якщо захочеш побудувати графіки

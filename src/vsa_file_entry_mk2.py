@@ -385,7 +385,7 @@ if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
     signal.signal(signal.SIGINT, handle_sigint)
-    # reanalyze_csv(r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant_20260202_225227.csv ", 10e6)
+    reanalyze_csv(r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant_20260202_225227.csv ", 10e6)
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
         # show_cli()
