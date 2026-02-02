@@ -2,6 +2,38 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "vsa mk II (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/vsa_file_entry_mk2.py",
+            "args": [
+                
+                // SSK records
+                "-i", "E:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026.wav",
+                // "-i", "e:/home/d7/Public/signals/OFDM/stripped/baseband_1331012500Hz_16-46-58_02-02-2026_1ant_1burst.wav",
+                // "--samp-rate", "6e6",
+                // "-i", "e:/home/d7/Public/signals/OFDM/fout1330range2_1.bin", 
+                // "-i", "e:/home/d7/Public/signals/OFDM/fout1330range2_1.bin", 
+
+                // Man Gen 
+                // "--samp-rate", "5e6",
+                // "-i", "e:/home/d7/Public/signals/OFDM/manual_gen/test_rand_BPSK_ofdm_128-16-90.wav", 
+                // "-i", "e:/home/d7/Public/signals/OFDM/manual_gen/test_rand_BPSK_ofdm_64-16-44.wav", 
+                // "-i", "e:/home/d7/Public/signals/OFDM/manual_gen/test_rand_BPSK_ofdm_64-32-44.wav", 
+                // "-i", "e:/home/d7/Public/signals/OFDM/manual_gen/test_rand_BPSK_ofdm_64-4-44.wav", 
+
+                // Lihno rec
+                // "--samp-rate", "10e6",
+                // "-i", "e:/home/d7/Public/signals/OFDM/5MHz-11-14-25.bin.bin", 
+
+                // D7 HACK RF (some shit with dynamic range)
+                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1340000000Hz_13-50-16_22-01-2026.wav"
+                // "-i", "e:/home/d7/Public/signals/OFDM\baseband_1340000000Hz_13-51-21_22-01-2026.wav"
+            ],
+            // "python": "d:\\Python\\Python3.13\\python.exe",
+            "console": "integratedTerminal"
+        },
+        {
             "name": "vsa scaff OFDM (Python)",
             "type": "debugpy",
             "request": "launch",

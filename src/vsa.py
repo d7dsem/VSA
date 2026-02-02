@@ -105,10 +105,9 @@ class SpecVidget:
         title_base: Optional[str] = None,
         y_lim: Optional[Tuple[float, float]] = None,
 
-        
         # === shrink/expand y control  ===
-        y_guard_frac: float = 0.15,
-        spec_y_hyst_up: float = 12.0,
+        y_guard_frac: float = 0.25,
+        spec_y_hyst_up: float = 6.0,
         spec_y_hyst_dn: float = 6.0,
 
         y_shrink_hold_updates: int = 12,
@@ -357,7 +356,7 @@ class SpecVidget:
             self._stem_lines.set_segments(segments)
 
 
-            y_ref = spectr_arr
+
 
             # SMOOTH
             if smoothed is None:
@@ -452,6 +451,7 @@ class SpecVidget:
                     self._line_peak_hold.set_visible(False)
                     
             # Оновлюємо межі (тут якраз перераховується self._spec_ymin для наступного кадру)
+            y_ref = spectr_arr
             self._update_spec_ylim(y_ref)
 
             self.fig.canvas.draw_idle()
@@ -515,7 +515,7 @@ class WaterfallVidget:
         self.img.set_clim(vmin=np.min(self.data_buffer), vmax=np.max(self.data_buffer))
 
 class VSA:
-    def __init__(self, freq_bins: np.ndarray, fig: D7Figure,
+    def __init__(self, freq_bins: np.ndarray, fig: D7Figure, 
                  ax_spec: Axes, ax_wfall: Optional[Axes]=None, ax_cbar: Optional[Axes]=None, **kwargs):
         self.d7f = fig
         self.render_dt = kwargs.get('render_dt', 0.001)

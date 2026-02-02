@@ -19,7 +19,7 @@ def get_scale_from_units(unit: Literal["M", "K"]) -> float:
 INT16_FULL_SCALE: Final = 32768.0
 COMPLEX_SCALING_FACTOR: Final = 2.0
 P_FS: Final = COMPLEX_SCALING_FACTOR * (INT16_FULL_SCALE ** 2)
-
+P_FS_RAW: Final = COMPLEX_SCALING_FACTOR * (INT16_FULL_SCALE ** 2)
 def i16_to_f32(
         src: IQInterleavedI16,
         dst: IQInterleavedF32,

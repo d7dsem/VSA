@@ -68,18 +68,22 @@ _fpath = r"D:\C\Repo\signals_data\Fc_421000000Hz_ch_4_v1.bin"
 samp_rate = 480e3
 
 _fpath = r"D:\C\Repo\signals_data\Fc_450000000Hz.wav"
+_fpath = "e:\\home\\d7\\Public\\signals\\OFDM\\5MHz-11-14-25.bin"
+samp_rate = 1/1.00e-7
 # _fpath = r"D:\C\Repo\signals_data\461633kHz.wav"
-samp_rate = None
+# samp_rate = None
 
 
-Fc = 450000000
+Fc = 0
 freq_wnd: Tuple[float, float] = None # (449.5e6, 449.9e6)
 alpha = 0.01
 sigma = 4.0
-fft_n = 1024
-batch_n = 8
+start_pos = 498_000 # 800_000
+
+fft_n = 1024*2
+batch_n = 4
 p_val = 12
-step = fft_n * batch_n
+step = fft_n * batch_n // 8
 def do_vsa_file(
     fr: FReader,
     Fs: float,
@@ -88,12 +92,12 @@ def do_vsa_file(
     freq_wnd: Optional[Tuple[float, float]] = freq_wnd,
     spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'hann',
     
-    start_pos: int = 1_500_000,
+    start_pos: int = start_pos,
     batch_n: int = batch_n,
     step_samples: Optional[int] = step,
 
     sigma: Optional[float] = sigma,
-    p_val: Optional[int] = p_val,
+    p_val: Optional[int] = p_val,  # noise floor percentile
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
     render_dt: float = 0.001,
 ) -> None:
@@ -116,15 +120,17 @@ def do_vsa_file(
     else:
         mask = slice(None) 
     freq_bins_view = freq_bins_full[mask]
-
-
+    dF = Fs/fft_n
+    dur_ms = 1e3 * batch_n*fft_n / Fs
+    title_base = f"File: {fr.f_path.stem} | SR: {Fs/1e6} MHz | {batch_n=}, {fft_n=:_} {dur_ms=:.3f} | dF: {dF/1e3} KHz |"
     d7fg, ax_spec, ax_wfall, ax_side = deploy_layout()
     cmap_name: CMapType = 'inferno'
     vsa: ControledVidget = VSA(
         freq_bins_view, d7fg, ax_spec, ax_wfall, ax_side,
         render_dt=render_dt,
         spec_y_lim=spec_y_lim,
-        cmap_name=cmap_name
+        cmap_name=cmap_name,
+        title_base = title_base,
     )
 
     fr.jump_to_samp_pos(start_pos)
@@ -218,7 +224,7 @@ def do_vsa_file(
             fr.jump_to_samp_pos(start_pos + step_samples * n_iter)
 
     print(f"[MAIN] do_vsa_file() exited cleanly", flush=True)
-
+    plt.pause(30)
 
 # CLI
 def _build_cli() -> argparse.ArgumentParser:
@@ -315,6 +321,7 @@ def _apply_vsa_file_contract(args: argparse.Namespace) -> argparse.Namespace:
 
     return args
  
+
 def show_cli():
     print(f"\n{DBG} CLI: {GRAY}" + " ".join(map(str, sys.argv)) + RESET)
 
@@ -329,13 +336,13 @@ if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
     signal.signal(signal.SIGINT, handle_sigint)
-    
+
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
         # show_cli()
         args = _build_cli().parse_args()
     else:
-        print(f"{WARN} USe dev defaults!")
+        print(f"{WARN} Use dev defaults!")
 
         args = argparse.Namespace(
             file=Path(_fpath),
