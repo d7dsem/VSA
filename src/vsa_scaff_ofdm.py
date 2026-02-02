@@ -34,6 +34,7 @@ from typing import Optional, Tuple
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 
 from colorizer import colorize, inject_colors_into
 from fft_core import P_FS_RAW, IQInterleavedF32, IQInterleavedI16, i16_to_f32
@@ -51,17 +52,27 @@ inject_colors_into(globals())
 # Identity
 _MODULE_MARKER = Path(__file__).stem
 
+# _fpath = r"e:\home\d7\Public\signals\OFDM\manual_gen\test_rand_BPSK_ofdm_128-16-90.wav"
+# _fpath = r"e:\home\d7\Public\signals\OFDM\manual_gen\test_rand_BPSK_ofdm_64-16-44.wav"
+# _fpath = r"e:\home\d7\Public\signals\OFDM\manual_gen\test_rand_BPSK_ofdm_64-32-44.wav"
+# _fpath = r"e:\home\d7\Public\signals\OFDM\manual_gen\test_rand_BPSK_ofdm_64-4-44.wav"
+samp_rate = 2e6
 
-_fpath = r"d:\cpp\unk\signals\MIMO\baseband_1333500000Hz_11-26-53_26-01-2026.bin"
-samp_rate = 1/1.00e-7
+_fpath = r"e:\home\d7\Public\signals\OFDM\5MHz-11-14-25.bin"
+samp_rate = 10e6
+
+# _fpath = r"e:\home\d7\Public\signals\OFDM\5MHz-11-14-25.bin"
+# samp_rate = 10e6
+
+# _fpath = r"e:\home\d7\Public\signals\OFDM\baseband_1340000000Hz_13-23-48_22-01-2026.wav"
+# _fpath = r"e:\home\d7\Public\signals\OFDM\baseband_1340000000Hz_13-50-16_22-01-2026.wav"
+# _fpath = r"e:\home\d7\Public\signals\OFDM\baseband_1340000000Hz_13-51-21_22-01-2026.wav"
 
 
-_Fc = -1.5e6
-_Fwdt = 1.2e6
-_fft_n = 1024*1
 _Fc = 0
 _Fwdt = None
-_fft_n = 256
+_fft_n = 1024
+
 def do_vsa_file(
     fr: FReader,
 
@@ -72,10 +83,10 @@ def do_vsa_file(
     freq_grid_count: int | None = None,
 
     # sigma: float|None = None,
-    alpha: float|None = None, 
+    # alpha: float|None = None, 
     
     sigma: float|None = .5,
-    # alpha: float|None = 0.001,
+    alpha: float|None = 0.01,
     
     start_pos: int = 0,
     step_samples: Optional[int] = 1,
@@ -130,10 +141,11 @@ def do_vsa_file(
     fr.jump_to_samp_pos(start_pos)
     n_iter = 0
 
-    def _process_frame(on_update=None):
+    def _process_frame(update=None):
         """Process one frame: FFT for spectrum, extract I/Q for time-domain."""
         i16_to_f32(i16_buf, f32_buf, fft_n, normalize=False)
-
+        if update is None:
+            update = lambda *args, **kwargs: None
         # Extract I and Q components
         y_i = f32_buf[0::2].copy()
         y_q = f32_buf[1::2].copy()
@@ -158,13 +170,44 @@ def do_vsa_file(
                 p_spec_ema = np.sqrt(spec_ema)
 
         y_spec_smooth = None if sigma is None else gaussian_filter1d(y_spec, sigma=sigma)
+        # analize spectre curve for find peaks with prominience - find idx of them
+        # map finded idx to freq bins
+        v_lines_hz = None
+        h_lines_db = None
+        title_add = ""
+        if 1:
+            _spec_smooth = y_spec_smooth
+            # _spec_smooth = p_spec_ema
+            
+            # 1. Шукаємо індекси піків на згладженому спектрі
+            # prominence=10 означає, що пік має підніматися над "підошвою" мінімум на 10 dB
+            peaks_idx, properties = find_peaks(_spec_smooth, prominence=10, distance=5)
 
-        if on_update:
-            on_update(y_spec, y_spec_smooth, p_spec_ema, y_i, y_q, f" {fr.progress_str()}")
+            # 2. Мапимо індекси на фізичні частоти (Гц)
+            # ВАЖЛИВО: використовуємо повний масив частот, що відповідає y_spec
+            v_lines_hz = freq_bins[peaks_idx]
 
-    update_callback = lambda y_spec, y_smooth, y_ema, y_i, y_q, title: vsa.update(
-        y_spec, y_smooth, y_ema, I=y_i, Q=y_q, curr_sampl_pos=fr.curr_sampl_pos, title=title
-    )
+            # 3. Визначаємо горизонтальну лінію (наприклад, середній рівень шуму + запас)
+            noise_floor = np.median(y_spec) 
+            threshold_line = noise_floor + 15  # Лінія відсічки
+            h_lines_db = [threshold_line]
+            cn_peaks = len(v_lines_hz)
+            df_mean = 0.0
+            title_add = f" peaks found: {cn_peaks} |"
+            if cn_peaks > 1:
+                # np.diff рахує різницю між сусідніми елементами: [f2-f1, f3-f2, ...]
+                df_mean = np.mean(np.diff(v_lines_hz))
+                title_add += f" df_mean: {df_mean/1e3:.3f} KHz |"
+            # print(title_add)
+
+        # _freqs = freq_bins[::freq_bins.size//4]
+        update( 
+            y_spec, smoothed=y_spec_smooth, ema=p_spec_ema, 
+            I=y_i, Q=y_q,
+            v_lines=v_lines_hz,
+            h_lines=h_lines_db,
+            title=f" {fr.progress_str()} {title_add}"
+        )
 
     while True:
         if vsa.stop_requested:
@@ -184,7 +227,7 @@ def do_vsa_file(
 
                 n_read = fr.read_raw_into(i16_buf, fft_n*2)
                 if n_read == fft_n*2:
-                    _process_frame(on_update=update_callback)
+                    _process_frame(update=vsa.update)
 
             plt.pause(vsa.render_dt)
             continue
@@ -193,7 +236,7 @@ def do_vsa_file(
         if n_read != fft_n*2:
             print(f"read {n_read} not match chunk {fft_n}x2 : terminate...")
             break
-        _process_frame(on_update=update_callback)
+        _process_frame(update=vsa.update)
         n_iter += 1
         if step_samples is not None:
             fr.jump_to_samp_pos(start_pos + step_samples * n_iter)
@@ -327,6 +370,7 @@ if __name__ == "__main__":
         )
     try:
         args = _apply_vsa_file_contract(args)
+        print(f"{INFO} File: {YELLOW}{args.file.stem}{RESET}")
         with FReader(args) as fr:
             do_vsa_file(fr)
     except KeyboardInterrupt:

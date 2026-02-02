@@ -7,7 +7,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from fft_core import ArrF32_1D, batch_fft, swap_freq, to_dbfs, IQInterleavedI16
 from io_stuff import SOCK_BUF_SZ, create_socket
-from vsa import P_FS, VSA_SPECTR
+from vsa_gsv import P_FS, VSA_SPECTR
 from data_layer import HDR_SZ, RingBuffer, proc_udp_payload
 
 def do_sock_work(

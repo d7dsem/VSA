@@ -11,7 +11,7 @@ from io_stuff import ArrF32_1D, create_socket
 
 from scipy.ndimage import gaussian_filter1d
 
-HDR_SZ: Final = 8
+HDR_SZ: Final = 0
 
 @dataclass(frozen=True)
 class ParamsStreamUDP:

@@ -30,15 +30,20 @@ import argparse
 from pathlib import Path
 import signal
 import traceback
-from typing import Optional, Tuple
+from typing import Annotated, Final, Literal, Optional, Tuple, TypeAlias
 from matplotlib import pyplot as plt
 import numpy as np
+
+import scipy.signal.windows as windows
 from scipy.ndimage import gaussian_filter1d
+from scipy.fft import fft as sfft
+from scipy.signal import find_peaks
 
 from colorizer import colorize, inject_colors_into
-from fft_core import P_FS_RAW, IQInterleavedF32, IQInterleavedI16, i16_to_f32
+
 from io_stuff import FReader
-from vsa_gsv import VSA
+from vsa import VSA, CMapType, ControledVidget, deploy_layout
+# from vsa import VSA
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -50,156 +55,175 @@ inject_colors_into(globals())
 # =====================================================
 # Identity
 _MODULE_MARKER = Path(__file__).stem
+# ============
+
+INT16_FULL_SCALE: Final = 32768.0
+IQInterleavedF32: TypeAlias = Annotated[np.typing.NDArray[np.float32], "float32 1D: i0 q0 i1 q1 ... (interleaved IQ)"]
 
 
-_fpath = r"d:\cpp\unk\signals\MIMO\baseband_1333500000Hz_11-26-53_26-01-2026.bin"
+_fpath = r"e:\home\d7\Public\signals\OFDM\5MHz-11-14-25.bin"
 samp_rate = 1/1.00e-7
 
+_fpath = r"D:\C\Repo\signals_data\Fc_421000000Hz_ch_4_v1.bin"
+samp_rate = 480e3
 
-_Fc = -1.5e6
-_Fwdt = 1.2e6
-_fft_n = 1024*1
-_Fc = 0
-_Fwdt = None
-_fft_n = 256
+_fpath = r"D:\C\Repo\signals_data\Fc_450000000Hz.wav"
+_fpath = "e:\\home\\d7\\Public\\signals\\OFDM\\5MHz-11-14-25.bin"
+samp_rate = 1/1.00e-7
+
+_fpath = r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav"
+samp_rate = None
+
+
+Fc = 0
+freq_wnd: Tuple[float, float] = None # (449.5e6, 449.9e6)
+alpha = 0.01
+sigma = 4.0
+fft_n = 1024
+batch_n = 1
+p_val = 12
+step = fft_n * batch_n
 def do_vsa_file(
     fr: FReader,
-
-    Fc: float = _Fc,
-    freq_span: Tuple[float, float] | None = (-_Fwdt, +_Fwdt) if _Fwdt else None,
-
-    fft_n: int = _fft_n,
-    freq_grid_count: int | None = None,
-
-    # sigma: float|None = None,
-    alpha: float|None = None, 
+    Fs: float,
+    Fc: float = Fc,
+    fft_n: int = fft_n,
+    freq_wnd: Optional[Tuple[float, float]] = freq_wnd,
+    spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'hann',
     
-    sigma: float|None = .5,
-    # alpha: float|None = 0.001,
-    
-    start_pos: int = 0,
-    step_samples: Optional[int] = 1,
+    start_pos: int = 1_500_000,
+    batch_n: int = batch_n,
+    step_samples: Optional[int] = step,
+
+    sigma: Optional[float] = sigma,
+    p_val: Optional[int] = p_val,
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
-    iq_y_lim: Optional[Tuple[float, float]] = None,
     render_dt: float = 0.001,
-    use_dbfs: bool = True,
 ) -> None:
     """
-    Process WAV file with tri-panel visualization.
-    
+    Process IQ file.
+
     spec_y_lim: hard y-limits for spectrum (optional)
-    iq_y_lim: hard y-limits for I/Q signals (optional)
     """
-
-    Fs: float = fr.Fs
-    dF = Fs / fft_n
-    Fl, Fr = freq_span if freq_span else (Fc - Fs/2, Fc + Fs/2)
-
-    # Індекси бінів для меж діапазону
-    idx_l = int(np.round((Fl - Fc) / dF + fft_n // 2))
-    idx_r = int(np.round((Fr - Fc) / dF + fft_n // 2))
-
-    # Уточнені частоти на основі дійсних індексів
-    Fl_adj = (idx_l - fft_n // 2) * dF + Fc
-    Fr_adj = (idx_r - fft_n // 2) * dF + Fc
-
-    print(f"{INFO} Fs={Fs/1e6:.1f} MHz  {fft_n=:_}  dF={int(dF):_} Hz"\
-        f"\n    Freq_span req: [{Fl/1e6:^6.1f} {Fc/1e6:^6.1f} {Fr/1e6:^6.1f}] MHz"\
-        f"\n    Freq_span adj: [{Fl_adj/1e6:^6.1f} {Fc/1e6:^6.1f} {Fr_adj/1e6:^6.1f}] MHz"\
-        f"\n    Bin indices:   [{idx_l:_}..{idx_r:_}] ({idx_r-idx_l:_})")
+    if not step_samples:
+        step_samples = fft_n
     
-    freq_bins = (np.arange(fft_n, dtype=np.float32) - (fft_n // 2)) * dF + Fc
-        
-    i16_buf: IQInterleavedI16 = np.empty(fft_n * 2, dtype=np.int16)
-    f32_buf: IQInterleavedF32 = np.empty(fft_n * 2, dtype=np.float32)
-    x_c: np.ndarray = np.empty(fft_n, dtype=np.complex64)
-    spec_ema: np.ndarray = np.zeros(fft_n, dtype=np.float32)
-    freq_bins = (np.arange(fft_n, dtype=np.float32) - (fft_n // 2)) * dF + Fc
+    dF = Fs / fft_n
+    chunk_len = fft_n * batch_n
+    f32_buf: IQInterleavedF32 = np.empty(fft_n * batch_n * 2, dtype=np.float32)
 
-    vsa = VSA(
-        freq_bins,
-        freq_show_idx=(idx_l, idx_r),
-        freq_grid_step= fft_n // freq_grid_count if freq_grid_count else None,
-
+    freq_bins_full = (np.arange(fft_n, dtype=np.float32) - (fft_n // 2)) * dF + Fc
+    if freq_wnd:
+        f_min, f_max = freq_wnd
+        mask = (freq_bins_full >= f_min) & (freq_bins_full <= f_max)
+    else:
+        mask = slice(None) 
+    freq_bins_view = freq_bins_full[mask]
+    dF = Fs/fft_n
+    dur_ms = 1e3 * batch_n*fft_n / Fs
+    title_base = f"File: {fr.f_path.stem} | SR: {Fs/1e6} MHz | {batch_n=}, {fft_n=:_} {dur_ms=:.3f} | dF: {dF/1e3} KHz |"
+    d7fg, ax_spec, ax_wfall, ax_side = deploy_layout()
+    cmap_name: CMapType = 'inferno'
+    vsa: ControledVidget = VSA(
+        freq_bins_view, d7fg, ax_spec, ax_wfall, ax_side,
         render_dt=render_dt,
         spec_y_lim=spec_y_lim,
-        iq_y_lim=iq_y_lim,
-        use_dbfs=use_dbfs
+        cmap_name=cmap_name,
+        title_base = title_base,
     )
 
     fr.jump_to_samp_pos(start_pos)
     n_iter = 0
 
-    def _process_frame(on_update=None):
-        """Process one frame: FFT for spectrum, extract I/Q for time-domain."""
-        i16_to_f32(i16_buf, f32_buf, fft_n, normalize=False)
 
-        # Extract I and Q components
-        y_i = f32_buf[0::2].copy()
-        y_q = f32_buf[1::2].copy()
+    _P_FS = float(fft_n)**2  # Константа для 0 dBFS (максимальна потужність комплексного тону)
+    # INT16_FULL_SCALE == 32768
+    if spec_windowing == 'rect':
+        wnd_coeffs = np.ones(fft_n, dtype=np.float32) / INT16_FULL_SCALE
+    else:
+        raw_wnd = windows.get_window(spec_windowing, fft_n, fftbins=True)
+        # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
+        wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
 
-        # Compute spectrum 
-        x_c.real[:] = f32_buf[0::2]
-        x_c.imag[:] = f32_buf[1::2]
+    def _process_frame(_update=None):
+            # 1. Вікнування (Broadcasting)
+            obs = (f32_buf[0::2].reshape(batch_n, fft_n) + 
+                1j * f32_buf[1::2].reshape(batch_n, fft_n)) * wnd_coeffs
 
-        X = np.fft.fft(x_c, n=fft_n)
-        X = np.fft.fftshift(X)
-        P = (X.real * X.real + X.imag * X.imag)
-        p_spec_ema = None
-        if alpha is not None:
-            np.add(alpha * P, (1-alpha)*spec_ema, out=spec_ema)
-        if use_dbfs:
-            y_spec = 10.0 * np.log10(P / P_FS_RAW)
-            if alpha is not None: 
-                p_spec_ema = 10.0 * np.log10(spec_ema / P_FS_RAW)
-        else:
-            y_spec = np.sqrt(P)
-            if alpha is not None:
-                p_spec_ema = np.sqrt(spec_ema)
+            # 2. Scipy FFT (Пакетне)
+            
+            X = sfft(obs, axis=1)
 
-        y_spec_smooth = None if sigma is None else gaussian_filter1d(y_spec, sigma=sigma)
+            # 3. Потужність БЕЗ кореня (X * conj(X))
+            # Метод .real тут безпечний, бо результат множення комплексного на спряжене 
+            # завжди суто дійсний, але NumPy може залишити тип complex.
+            P_linear = np.mean((X * X.conj()).real, axis=0)
+            
+            # 4. Центрування та логарифм
+            P_shifted = np.fft.fftshift(P_linear)
+            y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
+            
+            if p_val:
+                noise_floor = np.percentile(y_spec, p_val)
+                h_coords=np.array([noise_floor])
+            else:
+                h_coords = None
+            # 5. Згладжування
+            y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
 
-        if on_update:
-            on_update(y_spec, y_spec_smooth, p_spec_ema, y_i, y_q, f" {fr.progress_str()}")
-
-    update_callback = lambda y_spec, y_smooth, y_ema, y_i, y_q, title: vsa.update(
-        y_spec, y_smooth, y_ema, I=y_i, Q=y_q, curr_sampl_pos=fr.curr_sampl_pos, title=title
-    )
-
+            y_masked = y_spec[mask]
+            y_smooth_masked = y_spec_smooth[mask]
+            
+            # 6. Виразний пошук піків
+            # distance: мінімальна відстань між піками в бінах (наприклад, 10 бінів)
+            # prominence: наскільки пік має виділятися над оточенням (наприклад, 5 dB)
+            peaks_idx, _ = find_peaks(
+                y_smooth_masked, 
+                height=-70,       # Поріг (як і раніше)
+                distance=5,       # Не ліпити лінії занадто близько
+                prominence=3.0    # Відсікаємо дрібний шум
+            )
+            # Отримуємо частоти для v_lines
+            peak_freqs = freq_bins_view[peaks_idx]
+            if _update:
+                _update(y_masked, y_smooth_masked, f" {fr.progress_str()}",
+                        v_coords=peak_freqs,
+                        h_coords=h_coords
+                )
+                
+                
     while True:
         if vsa.stop_requested:
             print(f"[MAIN] stop_requested=True: terminating...", flush=True)
             break
 
-        if not vsa.figure_alive():
+        if not vsa.fig_alive:
             print(f"[MAIN] figure closed: terminating...", flush=True)
             break
 
         if vsa.paused:
-            delta = vsa.get_and_clear_step_delta()
+            delta = vsa.delta
             if delta != 0:
                 new_pos = fr.curr_sampl_pos + delta * step_samples
-                new_pos = max(0, min(new_pos, fr.samples_total - fft_n))
+                new_pos = max(0, min(new_pos, fr.samples_total - chunk_len))
                 fr.jump_to_samp_pos(new_pos)
-
-                n_read = fr.read_raw_into(i16_buf, fft_n*2)
-                if n_read == fft_n*2:
-                    _process_frame(on_update=update_callback)
-
+                n_read = fr.read_samples_into(f32_buf, chunk_len)
+                if n_read == chunk_len:
+                    _process_frame(_update=vsa.update)
             plt.pause(vsa.render_dt)
             continue
 
-        n_read = fr.read_raw_into(i16_buf, fft_n*2)
-        if n_read != fft_n*2:
-            print(f"read {n_read} not match chunk {fft_n}x2 : terminate...")
+        n_read = fr.read_samples_into(f32_buf, chunk_len)
+        if n_read != chunk_len:
+            print(f"read {n_read} not match chunk {fft_n}x{batch_n}x2 : terminate...")
             break
-        _process_frame(on_update=update_callback)
+        _process_frame(_update=vsa.update)
         n_iter += 1
         if step_samples is not None:
             fr.jump_to_samp_pos(start_pos + step_samples * n_iter)
 
     print(f"[MAIN] do_vsa_file() exited cleanly", flush=True)
-
+    plt.pause(30)
 
 # CLI
 def _build_cli() -> argparse.ArgumentParser:
@@ -296,9 +320,11 @@ def _apply_vsa_file_contract(args: argparse.Namespace) -> argparse.Namespace:
 
     return args
  
+
 def show_cli():
     print(f"\n{DBG} CLI: {GRAY}" + " ".join(map(str, sys.argv)) + RESET)
-    
+
+
 def handle_sigint(signum, frame):
     print("Ctrl+C pressed. Graceful shutdown...")
     raise KeyboardInterrupt
@@ -309,32 +335,38 @@ if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
     signal.signal(signal.SIGINT, handle_sigint)
-    
+
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
         # show_cli()
         args = _build_cli().parse_args()
     else:
-        print(f"{WARN} USe dev defaults!")
+        print(f"{WARN} Use dev defaults!")
+
         args = argparse.Namespace(
             file=Path(_fpath),
             samp_offset=0,
             samp_rate=samp_rate,
-            center_freq=5e6,
+            center_freq=0,
             fft_n=1024,
             dtype="int16",
             verbose=True
         )
+        
     try:
         args = _apply_vsa_file_contract(args)
         with FReader(args) as fr:
-            do_vsa_file(fr)
+            Fs=args.samp_rate
+            print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={Fs/1e3} KHz")
+            do_vsa_file(fr, Fs=Fs)
+
     except KeyboardInterrupt:
         pass
     except FileNotFoundError as e:
         print(f"{ERR} {str(e)}")
     except Exception as e:
-        print(f"{ERR} Unhandled exception: {e}")
+        print("-"*32)
         traceback.print_exc()
+        print("-"*32)
+        print(f"{ERR} Unhandled exception: {GRAY}{e}{RESET}")
         show_cli()
-        
