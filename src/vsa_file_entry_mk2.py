@@ -97,11 +97,11 @@ def do_vsa_file(
 
     sigma: Optional[float] = sigma,
     # p_val: Optional[int] = p_val,  # noise floor percentile
-    threshold_iqr: float = 10.0, # Interquartile Range singal presence thr, dB
+    threshold_iqr: float = 6.0, # Interquartile Range singal presence thr, dB
     min_bw: float = 1.25e6, # Minimal bw
     spec_y_lim: Optional[Tuple[float, float]] = None, #(-40, 40),
     render_dt: float = 0.001,
-    no_plot: bool = True
+    no_plot: bool = False
 ) -> None:
     """
     Process IQ file.
@@ -150,7 +150,8 @@ def do_vsa_file(
         raw_wnd = windows.get_window(spec_windowing, fft_n, fftbins=True)
         # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
         wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
-
+    p10: float = 0
+    p75: float = 0
     def _process_frame(_update=None)->Tuple[bool, float, List[BandwidtBurst]]:
         # Returns has_signal and occupance
         # 1. Вікнування (Broadcasting)
@@ -171,30 +172,32 @@ def do_vsa_file(
         y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
         y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
         
+        # Depends on signal record BW and need msnual adjuct
         p10 = np.percentile(y_spec, 10)
-        p75 = np.percentile(y_spec, 75)
-        iqr = p75 - p10
+        pHigh = np.percentile(y_spec, 50) # 75
+        iqr = pHigh - p10
         has_sign = iqr > threshold_iqr
         v_lines = []
-        
+
         if has_sign:
             # --- РОЗРАХУНОК OCCUPANCE ---
             # Визначаємо адаптивний поріг детектування сигналу. 
             # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
-            thr_occupance = p75 + (0.5 * iqr) 
-            h_coords =[p10, p75, thr_occupance]
+            thr = pHigh + (0.25 * iqr) 
+            h_coords =[pHigh, thr]
             # Рахуємо кількість бінів, що перевищують цей поріг
-            active_bins = np.sum(y_spec > thr_occupance)
+            active_bins = np.sum(y_spec > thr)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
             occupance = active_bins / len(y_spec)
-            bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
+            bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr)
             for bnd in bnd_lst:
                 v_lines.extend([bnd.f_start, bnd.center, bnd.f_end])
+                v_lines.append(bnd.center)
         else:
             noise_floor = np.percentile(y_spec, p_val)
             occupance = 0.0
             h_coords =[noise_floor]
-            thr_occupance = None
+            thr = None
             bnd_lst:List[BandwidtBurst] = []
             
         # ----------------------------

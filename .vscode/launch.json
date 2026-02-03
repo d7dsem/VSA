@@ -7,8 +7,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/analize_stage_II.py",
             "args": [
-                 "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
-
+                // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.bin", 
+                // "-i", "D:/C/Repo/signals_data/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.bin", "--Fs","10e6",
+                "-i", "D:/C/Repo/signals_data/OFDM/.stageI_5MHz-11-14-25/bw_0.bin", "--Fs","10e6",
             ]
         },
         {
@@ -18,8 +19,9 @@
             "program": "${workspaceFolder}/src/analize_stage_I.py",
             "args": [
                 // "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+                "-i", "D:/C/Repo/signals_data/OFDM/5MHz-11-14-25.bin", "--Fs","10e6",
                 // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
-                "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
+                // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
                 // "-i", "e:/home/d7/Public/signals/OFDM/5MHz-11-14-25.wav",
             ]
         },
@@ -29,7 +31,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/vsa_file_entry_mk2.py",
             "args": [
-                
+                "-i", "D:/C/Repo/signals_data/OFDM/.stageI_5MHz-11-14-25/bw_0.bin", "--samp-rate","10e6",
+                // "-i", "D:/C/Repo/signals_data/OFDM/5MHz-11-14-25.bin", "--samp-rate","10e6",
                 // "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
 
                 // SSK records

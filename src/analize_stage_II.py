@@ -59,7 +59,8 @@ def _analyze_burst_structure(burst: np.ndarray, offset: int):
         print(f"  [Burst @ {offset}] Structure found! Period L={L}, Confidence={confidence:.2f}")
     else:
         print(f"  [Burst @ {offset}] No periodic structure detected.")
-        
+
+
 def _perform_preamble_search(iq_samples: np.ndarray, n_min: int, n_max: int):
     # 1. Обчислюємо миттєву потужність
     mag_sq = np.abs(iq_samples)**2
@@ -107,7 +108,6 @@ class Burst:
     end: int        # Індекс кінця в семплах
     length: int     # Довжина в семплах (len)
     duration: float # Тривалість в секундах або мс (dur)
-    
     
 def do_file_stage_II(
     fr: FReader,
@@ -184,11 +184,14 @@ def do_file_stage_II(
         # Створюємо екземпляр класу і додаємо в масив
         burst_list.append(Burst(id=i, start=s, end=e, length=l, duration=d))
 
-
-    print(f"Burst count: {GREEN}{len(burst_list)}{RESET}")
+    bursts_ln = np.array([b.length for b in burst_list])
+    ln_mean = int(bursts_ln.mean())
+    print(f"Burst count: {GREEN}{len(burst_list)}{RESET}. Lengt: {bursts_ln.min()} {bursts_ln.max()}; mean {ln_mean} ({1e3*ln_mean/Fs:.3f} ms). ")
     # bursts overlay
+    
     K = n_bursts // 10
-    deep = 5000
+    deep = ln_mean + ln_mean//10
+    deep = int(0.75e-3 * Fs)
     # 1. Готуємо стек для сегментів
     # Використовуємо лише ті бурсти, які довші за глибину аналізу (deep)
     stack_power = []
@@ -197,12 +200,18 @@ def do_file_stage_II(
     stack_q = []
     # 1. Заповнюємо стеки (використовуємо комплексний сигнал)
     for b in burst_list[:K]:
-        if b.length >= deep:
+        # if b.length >= deep:
+        if 1:
             # Вирізаємо комплексний шматок для фази та I/Q
-            seg_iq = iq_samples[b.start : b.start + deep]
+            start = b.start
+            start_offs = max(start - 120, 0)
+            seg_iq = iq_samples[start_offs : start_offs + deep]
+            # phase_data =np.angle(seg_iq)
+            diff_iq = seg_iq[1:] * np.conj(seg_iq[:-1])
+            phase_data = np.angle(diff_iq)
             
-            stack_power.append(p_db[b.start : b.start + deep])
-            stack_pahse.append(np.angle(seg_iq))
+            stack_power.append(p_db[start_offs :start_offs + deep])
+            stack_pahse.append(phase_data)
             stack_i.append(seg_iq.real)
             stack_q.append(seg_iq.imag)
     # 2. Перетворюємо та обчислюємо (використовуємо медіану для фази — вона стійкіша)
@@ -211,6 +220,47 @@ def do_file_stage_II(
     stack_i_arr = np.array(stack_i)
     stack_q_arr = np.array(stack_q)
 
+    # median_ph_vec = np.median(stack_ph_arr, axis=0)
+    # noise_std = np.std(median_ph_vec[:80])
+    # search_zone = median_ph_vec[100:200]
+    # trigger_hits = np.where(np.abs(search_zone) > noise_std * 5)[0]
+    # if len(trigger_hits) > 0:
+    #     pat_start_idx = 100 + trigger_hits[0]
+    # else:
+    #     pat_start_idx = 120 # Фолбек на точку детектора
+    # pat_end_idx = pat_start_idx + 320
+    
+    # === РЕАЛЬНА АНАЛІТИКА ===
+    med_pwr = np.median(stack_p_arr, axis=0)
+    med_ph = np.median(stack_ph_arr, axis=0)
+    
+    # 1. ШУКАЄМО СТАРТ (через поріг потужності)
+    # Беремо рівень шуму в пре-тригері (перші 50 семплів)
+    p_noise_floor = np.mean(med_pwr[:50])
+    p_signal_max = np.max(med_pwr)
+    # Поріг — середина між шумом і сигналом (або 70% підйому)
+    p_threshold = p_noise_floor + (p_signal_max - p_noise_floor) * 0.7
+    
+    # Знаходимо першу точку, де потужність реально злетіла
+    possible_starts = np.where(med_pwr > p_threshold)[0]
+    pat_start_idx = possible_starts[0] if len(possible_starts) > 0 else 120
+
+    # 2. ШУКАЄМО КІНЕЦЬ (де закінчується структура преамбули)
+    # Преамбула OFDM — це стабільна зміна фази. Дані — це хаос.
+    # Рахуємо ковзну дисперсію фази (вікно 20 семплів)
+    from scipy.ndimage import generic_filter
+    ph_var = generic_filter(med_ph, np.var, size=20)
+    
+    # Там, де дисперсія різко зростає (фаза стає шумом) — там кінець преамбули
+    # Шукаємо після старту
+    var_threshold = np.mean(ph_var[pat_start_idx : pat_start_idx+100]) * 3
+    end_candidates = np.where(ph_var[pat_start_idx+200:] > var_threshold)[0]
+    
+    if len(end_candidates) > 0:
+        pat_end_idx = pat_start_idx + 200 + end_candidates[0]
+    else:
+        pat_end_idx = pat_start_idx + 400 # фолбек
+        
     patterns = {
         "Power (dB)": (stack_p_arr, "red"),
         "Phase (rad)": (stack_ph_arr, "green"),
@@ -218,10 +268,6 @@ def do_file_stage_II(
         "Q Component": (stack_q_arr, "orange")
     }
 
-
-    # # Медіана краще відсікає поодинокі викиди
-    # mean_pattern = np.mean(stack_p_arr, axis=0)
-    # median_pattern = np.median(stack_p_arr, axis=0)
     if 1:
         # 3. Візуалізація через subplots
         fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
@@ -236,8 +282,9 @@ def do_file_stage_II(
             ax.plot(np.median(data, axis=0), color=clr, linewidth=.75, label='Median Pattern')
             ax.set_title(title)
             ax.grid(True, alpha=0.2)
-            ax.legend(loc='upper right')
-
+            # ax.legend(loc='upper right')
+            ax.axvline(pat_start_idx, color='magenta', linestyle='--', label=f'START({pat_start_idx})')
+            ax.axvline(pat_end_idx, color='cyan', linestyle='--', label=f'END({pat_end_idx})')
         plt.xlabel("Samples from Start")
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
@@ -305,9 +352,9 @@ if __name__ == "__main__":
     # Стандартна ініціалізація
     signal.signal(signal.SIGINT, handle_sigint)
 
-    # show_cli()
-    args: argparse.Namespace = _build_cli().parse_args()
+    show_cli()
     try:
+        args: argparse.Namespace = _build_cli().parse_args()
         args = _apply_vsa_file_contract(args)
         with FReader(args) as fr:
             dur_sec = fr.samples_total / args.samp_rate

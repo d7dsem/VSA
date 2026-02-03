@@ -16,7 +16,7 @@ from scipy.signal import find_peaks
 
 
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
-from helpers import BandwidtBurst, PackBwBurst, aggregate_to_packs, analyze_and_export_bands, analyze_pack_intervals, find_bands, load_bursts, reanalyze_csv, save_bursts
+from helpers import BandwidtBurst, PackBwBurst, aggregate_to_packs, analyze_pack_intervals, find_bands, load_bursts, save_bursts
 from io_stuff import FReader
 from vsa import CMapType
 
@@ -108,7 +108,7 @@ def do_file_stage_I(
     chunk_len = fft_n * batch_n
     f32_buf: IQInterleavedF32 = np.empty(fft_n * batch_n * 2, dtype=np.float32)
     freq_bins_full = (np.arange(fft_n, dtype=np.float32) - (fft_n // 2)) * dF + Fc
-    print(f"Chunk dur: {CYAN}{1e3*chunk_len/Fs}{RESET} ms")
+    print(f"Chunk dur: {CYAN}{1e3*chunk_len/Fs}{RESET} ms ()")
     _P_FS = float(fft_n)**2  # Константа для 0 dBFS (максимальна потужність комплексного тону)
     # INT16_FULL_SCALE == 32768
     if spec_windowing == 'rect':
@@ -131,9 +131,9 @@ def do_file_stage_I(
             # sort by start idx and make dict where centre is key and val is list of bands
             burst_packs = aggregate_to_packs(band_lst, chunk_len, fr.samples_total, Fs, verbose=True)
             analyze_pack_intervals(burst_packs, Fs, verbose=True)
-            baseband_pack = burst_packs[0]
+            baseband_pack = burst_packs.get(0, None)
             pack_cnt = len(baseband_pack)
-            if pack_cnt:                
+            if pack_cnt:
                 _save_burst_pack(fr, f_key=0, folder=report_dir, burst_packs=burst_packs)
                 print()
                 return
@@ -179,16 +179,16 @@ def do_file_stage_I(
             wfall_ptr = 0
             start_samp_pos = fr.curr_sampl_pos
             wfall_memory.fill(-120.0)
-            
+        # Depends on signal record BW and need msnual adjuct
         p10 = np.percentile(y_spec, 10)
-        p75 = np.percentile(y_spec, 75)
-        iqr = p75 - p10
+        pHigh = np.percentile(y_spec, 50) # 75
+        iqr = pHigh - p10
         has_sign = iqr > threshold_iqr
         if has_sign:
             # --- РОЗРАХУНОК OCCUPANCE ---
             # Визначаємо адаптивний поріг детектування сигналу. 
             # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
-            thr_occupance = p75 + (0.5 * iqr) 
+            thr_occupance = pHigh + (0.5 * iqr) 
             # Рахуємо кількість бінів, що перевищують цей поріг
             active_bins = np.sum(y_spec > thr_occupance)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
@@ -284,7 +284,7 @@ if __name__ == "__main__":
         args = _apply_vsa_file_contract(args)
         with FReader(args) as fr:
             dur_sec = fr.samples_total / args.samp_rate
-            print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={args.samp_rate/1e6} MHz. df={1e-3*args.samp_rate/fft_n:.2} KHz. Dur={dur_sec:.2f} s")
+            print(f"{INFO} Input file: {YELLOW}{args.file}{RESET}. Fs={args.samp_rate/1e6} MHz. df={1e-3*args.samp_rate/fft_n:.2} KHz. Dur={dur_sec:.2f} s")
             do_file_stage_I(fr, Fs=args.samp_rate, Fc=args.Fc, fft_n=args.fft_n, batch_n=args.batch_n, min_bw=args.bw)
 
     except KeyboardInterrupt:

@@ -46,7 +46,7 @@ def load_bursts(filepath):
 
 def find_bands(curve: np.ndarray, freq_bins: np.ndarray, thr: float) -> List[BandwidtBurst]:
     """
-    Знаходить неперервні ділянки (смуги), де рівень сигналу curve перевищує поріг thr.
+    Знаходить неперервні ділянки (смуги), де сигналу перевищує поріг заповненості.
     """
     # 1. Створюємо маску значень вище порогу
     condition = curve > thr
