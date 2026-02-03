@@ -39,7 +39,7 @@ from scipy.fft import fft as sfft
 from scipy.signal import find_peaks
 
 
-from helpers import Bandwidt, analyze_and_export_bands, find_bands, reanalyze_csv
+from helpers import BandwidtBurst, analyze_and_export_bands, find_bands, reanalyze_csv
 from io_stuff import FReader
 from vsa import VSA, CMapType, ControledVidget, deploy_layout
 from colorizer import colorize, inject_colors_into
@@ -151,7 +151,7 @@ def do_vsa_file(
         # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
         wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
 
-    def _process_frame(_update=None)->Tuple[bool, float, List[Bandwidt]]:
+    def _process_frame(_update=None)->Tuple[bool, float, List[BandwidtBurst]]:
         # Returns has_signal and occupance
         # 1. Вікнування (Broadcasting)
         obs = (f32_buf[0::2].reshape(batch_n, fft_n) + 
@@ -187,7 +187,7 @@ def do_vsa_file(
             active_bins = np.sum(y_spec > thr_occupance)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
             occupance = active_bins / len(y_spec)
-            bnd_lst:List[Bandwidt] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
+            bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
             for bnd in bnd_lst:
                 v_lines.extend([bnd.f_start, bnd.center, bnd.f_end])
         else:
@@ -195,7 +195,7 @@ def do_vsa_file(
             occupance = 0.0
             h_coords =[noise_floor]
             thr_occupance = None
-            bnd_lst:List[Bandwidt] = []
+            bnd_lst:List[BandwidtBurst] = []
             
         # ----------------------------
         h_coords = np.array(h_coords)
@@ -223,7 +223,7 @@ def do_vsa_file(
             )
         return has_sign, occupance, bnd_lst
 
-    bands_lst:List[Bandwidt] = []
+    bands_lst:List[BandwidtBurst] = []
     while True:
         if vsa and vsa.stop_requested:
             print(f"[MAIN] stop_requested=True: terminating...", flush=True)
@@ -251,7 +251,7 @@ def do_vsa_file(
             break
         # _process_frame(_update=vsa.update)
         has_sign, occ, bnd_lst = _process_frame(_update=vsa.update if vsa else None )
-        for bnd in bnd_lst: bnd.samp_pos = fr.curr_sampl_pos
+        for bnd in bnd_lst: bnd.start_samp_pos = fr.curr_sampl_pos
         if has_sign and occ*Fs > min_bw: bands_lst.extend(bnd_lst)
         n_iter += 1
         if no_plot and n_iter%1_000==0:

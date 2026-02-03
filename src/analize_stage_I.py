@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import signal
 import traceback
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 import numpy as np
@@ -16,12 +16,12 @@ from scipy.signal import find_peaks
 
 
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
-from helpers import Bandwidt, analyze_and_export_bands, find_bands, reanalyze_csv
+from helpers import BandwidtBurst, PackBwBurst, aggregate_to_packs, analyze_and_export_bands, analyze_pack_intervals, find_bands, load_bursts, reanalyze_csv, save_bursts
 from io_stuff import FReader
 from vsa import CMapType
 
-from colorizer import colorize, inject_colors_into
 from vsa_file_entry import _apply_vsa_file_contract, show_cli
+from colorizer import colorize, inject_colors_into
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -32,7 +32,7 @@ inject_colors_into(globals())
 
 _break_req = False
 
-def save_session_artifacts_wfall(out_dir:Path, idx:int, wfall, base_name, fs:float, fc:float, start_samp:int):
+def save_session_artifacts_wfall(out_dir:Path, idx:int, wfall, base_name, fs:float, fc:float, start_samp:int)->Path:
     t_start = start_samp / fs
     prefix = f"{base_name}_part{idx:03d}_T{t_start:08.2f}s"
 
@@ -47,9 +47,43 @@ def save_session_artifacts_wfall(out_dir:Path, idx:int, wfall, base_name, fs:flo
     
     plt.colorbar(img, label='dBFS', pad=0.02)
     plt.title(f"Part {idx} | Offset: {t_start:.2f}s")
-    plt.savefig(out_dir / f"{prefix}.png", dpi=150, bbox_inches='tight')
+    out=out_dir / f"{prefix}.png"
+    plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
+    return out
 
+
+def _form_artefact_folder_path(sign_fpath:Path)->Path:
+    return fr.f_path.parent / (".stageI_" + fr.f_path.stem)
+
+def _form_bwbusrt_file_path(sign_fpath:Path, fft_n:int, batch_n:int)->Path:
+    return _form_artefact_folder_path(sign_fpath) / f"bw_busrts_{fft_n}x{batch_n}.json"
+
+def _save_burst_pack(fr: FReader, f_key: int, folder: Path, burst_packs: Dict[int, List[PackBwBurst]]):
+    if f_key not in burst_packs:
+        return
+
+    initial_sample_pos = fr.curr_sampl_pos
+    
+    packs = sorted(burst_packs[f_key], key=lambda x: x.start_samp_pos)
+    out_path = folder / f"bw_{f_key}.bin"
+    
+    try:
+        with open(out_path, 'wb') as f_out:
+            for p in packs:
+                fr.jump_to_samp_pos(p.start_samp_pos)
+                
+                byte_size = p.duration_samples * 4
+                chunk = fr._file.read(byte_size)
+                
+                if chunk:
+                    f_out.write(chunk)
+    finally:
+        # Повертаємось у вихідну точку через твій метод
+        fr.jump_to_samp_pos(initial_sample_pos)
+
+    print(f"  [Save] {f_key/1e6:8.2f} MHz -> {out_path.name}")
+    
 _fpath="D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav"
 Fs=1e10
 
@@ -74,7 +108,7 @@ def do_file_stage_I(
     chunk_len = fft_n * batch_n
     f32_buf: IQInterleavedF32 = np.empty(fft_n * batch_n * 2, dtype=np.float32)
     freq_bins_full = (np.arange(fft_n, dtype=np.float32) - (fft_n // 2)) * dF + Fc
-    
+    print(f"Chunk dur: {CYAN}{1e3*chunk_len/Fs}{RESET} ms")
     _P_FS = float(fft_n)**2  # Константа для 0 dBFS (максимальна потужність комплексного тону)
     # INT16_FULL_SCALE == 32768
     if spec_windowing == 'rect':
@@ -83,12 +117,26 @@ def do_file_stage_I(
         raw_wnd = windows.get_window(spec_windowing, fft_n, fftbins=True)
         # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
         wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
-    band_lst:List[Bandwidt] = []
+    band_lst:List[BandwidtBurst] = []
     
-    report_dir: Path = fr.f_path.parent / (".stageI_" + fr.f_path.stem)
+    report_dir: Path = _form_artefact_folder_path(fr.f_path)
     report_dir.mkdir(parents=True, exist_ok=True)
-    print(f"{INFO} All artifacts will be saved to: {YELLOW}{report_dir}{RESET}")
+    cashed_bw = _form_bwbusrt_file_path(fr.f_path, fft_n, batch_n)
     
+    print(f"{INFO} Artifacts store: {YELLOW}{report_dir}{RESET}")
+    if cashed_bw.exists():
+        band_lst = load_bursts(cashed_bw)
+        if band_lst:
+            # reanalyze_csv(csv, fs=Fs)
+            # sort by start idx and make dict where centre is key and val is list of bands
+            burst_packs = aggregate_to_packs(band_lst, chunk_len, fr.samples_total, Fs, verbose=True)
+            analyze_pack_intervals(burst_packs, Fs, verbose=True)
+            baseband_pack = burst_packs[0]
+            pack_cnt = len(baseband_pack)
+            if pack_cnt:                
+                _save_burst_pack(fr, f_key=0, folder=report_dir, burst_packs=burst_packs)
+                print()
+                return
     #  w-fall prework
     # Вирівнюємо до кратного chunk_len, щоб сесія закінчувалась цілим батчем
     # 1. Точний розрахунок розміру сесії
@@ -98,7 +146,7 @@ def do_file_stage_I(
     # 2. Pre-allocation: рівно стільки, скільки батчів пройде через цикл
     wfall_memory = np.full((rows_per_session, fft_n), -120.0, dtype=np.float32)
     wfall_ptr = 0
-    
+
     session_idx = 0
     start_samp_pos = fr.curr_sampl_pos
 
@@ -132,7 +180,6 @@ def do_file_stage_I(
             start_samp_pos = fr.curr_sampl_pos
             wfall_memory.fill(-120.0)
             
-            
         p10 = np.percentile(y_spec, 10)
         p75 = np.percentile(y_spec, 75)
         iqr = p75 - p10
@@ -146,8 +193,10 @@ def do_file_stage_I(
             active_bins = np.sum(y_spec > thr_occupance)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
             occupance = active_bins / len(y_spec)
-            _bnd_lst:List[Bandwidt] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
-            if occupance*Fs > min_bw: band_lst.extend(_bnd_lst)
+            _bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
+            if occupance*Fs > min_bw:
+                for bnd in _bnd_lst: bnd.start_samp_pos = fr.curr_sampl_pos
+                band_lst.extend(_bnd_lst)
 
         pbar.update(chunk_len)
     
@@ -169,15 +218,15 @@ def do_file_stage_I(
             Fs, Fc, 
             start_samp_pos
         )
+    
+    save_bursts(band_lst, cashed_bw)
     # TODO: bands to separate files
-    if band_lst:
-       csv, _ = analyze_and_export_bands(band_lst, Fs, base_filename=fr.f_path.stem)
-       reanalyze_csv(csv)
+
 
 # CLI
 def _build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="vsa-file.py",
+        prog="Analize Stage 1",
         description="Spec Analize pgase I: spectral analysis, build wfall finherprint, detect and spread bursts\bandwidth, for IQ recordings (.bin/.wav).",
     )
 

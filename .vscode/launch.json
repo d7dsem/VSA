@@ -2,12 +2,25 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Sateg I (Python)",
+            "name": "Stage II (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/analize_stage_II.py",
+            "args": [
+                 "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
+
+            ]
+        },
+        {
+            "name": "Stage I (Python)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/analize_stage_I.py",
             "args": [
-                "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+                // "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+                "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
+                // "-i", "e:/home/d7/Public/signals/OFDM/5MHz-11-14-25.wav",
             ]
         },
         {
@@ -17,7 +30,7 @@
             "program": "${workspaceFolder}/src/vsa_file_entry_mk2.py",
             "args": [
                 
-                "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+                // "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
 
                 // SSK records
                 // "-i", "E:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026.wav",
