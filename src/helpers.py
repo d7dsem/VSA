@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 import numpy as np
 import csv
 from datetime import datetime
@@ -91,17 +92,24 @@ def analyze_hops_and_timing(bands: List[Bandwidt], fs: float):
     
     return "\n".join(analysis)
 
-def analyze_and_export_bands(bands: List[Bandwidt], fs: float, base_filename: str = "vsa_report"):
+def analyze_and_export_bands(bands: List[Bandwidt], fs: float, base_filename: str = "vsa_report", folder:Optional[Path]=None):
     if not bands:
         print("No bands to analyze.")
         return
 
     # Формуємо ім'я файлу з таймстемпом
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_name = f"{base_filename}_{timestamp}"
+    if folder is None:
+        report = Path(f"{base_filename}_{timestamp}" )
+    else:
+        report = folder / f"band_report" 
+        
+        
+    csv_file = report.with_suffix(".csv")
+    
     
     # 1. Експорт у CSV (Сирі дані для аналізу)
-    csv_file = f"{report_name}.csv"
+    
     with open(csv_file, mode='w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['center_hz', 'width_hz', 'sample_pos', 'time_sec'])
@@ -109,7 +117,7 @@ def analyze_and_export_bands(bands: List[Bandwidt], fs: float, base_filename: st
             writer.writerow([b.center, b.wdt, b.samp_pos, b.samp_pos / fs])
 
     # 2. Формування звіту (Text Report)
-    txt_file = f"{report_name}.txt"
+    txt_file = report.with_suffix(".txt")
     
     # Розрахунки
     centers = np.array([b.center for b in bands])
@@ -152,7 +160,7 @@ def analyze_and_export_bands(bands: List[Bandwidt], fs: float, base_filename: st
     
     print(full_text)
     print(f"\n[DONE] Data saved to:\n  - {csv_file}\n  - {txt_file}")
-
+    return csv_file, txt_file
 
 import pandas as pd
 import numpy as np
@@ -195,7 +203,7 @@ def analyze_dwell_time(df, fs):
     print("="*50)
     return sessions
 
-def reanalyze_csv(csv_path, fs):
+def reanalyze_csv(csv_path: str|Path, fs):
     # 1. Завантажуємо дані
     print(f"Reading {csv_path}...")
     df = pd.read_csv(csv_path)

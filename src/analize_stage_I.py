@@ -1,9 +1,10 @@
+# src/analize_stage_I.py
 import sys, os
 import argparse
 from pathlib import Path
 import signal
 import traceback
-from typing import Annotated, Final, List, Literal, Optional, Tuple, TypeAlias
+from typing import List, Literal, Optional
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 import numpy as np
@@ -15,7 +16,7 @@ from scipy.signal import find_peaks
 
 
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
-from helpers import Bandwidt, analyze_and_export_bands, find_bands
+from helpers import Bandwidt, analyze_and_export_bands, find_bands, reanalyze_csv
 from io_stuff import FReader
 from vsa import CMapType
 
@@ -30,6 +31,24 @@ WHITE: str; BRIGHT_WHITE: str; RESET: str; WARN: str; ERR: str; INFO: str; DBG: 
 inject_colors_into(globals())
 
 _break_req = False
+
+def save_session_artifacts_wfall(out_dir:Path, idx:int, wfall, base_name, fs:float, fc:float, start_samp:int):
+    t_start = start_samp / fs
+    prefix = f"{base_name}_part{idx:03d}_T{t_start:08.2f}s"
+
+    # --- Збереження PNG (SDR++ Style) ---
+    plt.figure(figsize=(10, 20)) # Вертикальний "рулон"
+    f_range = (fs / 2) / 1e6
+    t_dur = (len(wfall) * (fft_n * batch_n)) / fs
+    
+    img = plt.imshow(wfall, aspect='auto', interpolation='nearest', cmap='magma',
+                     extent=[fc/1e6 - f_range, fc/1e6 + f_range, t_start + t_dur, t_start],
+                     vmin=-100, vmax=-40) # Підлаштуй під свій шум
+    
+    plt.colorbar(img, label='dBFS', pad=0.02)
+    plt.title(f"Part {idx} | Offset: {t_start:.2f}s")
+    plt.savefig(out_dir / f"{prefix}.png", dpi=150, bbox_inches='tight')
+    plt.close()
 
 _fpath="D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav"
 Fs=1e10
@@ -48,7 +67,8 @@ def do_file_stage_I(
     sigma: float = sigma,
     min_bw: float = min_bw,
     threshold_iqr: float = 10.0,
-    spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'rect'
+    spec_windowing:  Literal['hann', 'hamming', 'blackmanharris', 'rect'] = 'rect',
+    sz_lim_mb: int = 500 # for wfall files
 ):
     dF = Fs / fft_n
     chunk_len = fft_n * batch_n
@@ -63,14 +83,32 @@ def do_file_stage_I(
         raw_wnd = windows.get_window(spec_windowing, fft_n, fftbins=True)
         # Поєднуємо нормалізацію вікна (mean) та амплітуди (INT16)
         wnd_coeffs = (raw_wnd / (np.mean(raw_wnd) * INT16_FULL_SCALE)).astype(np.float32)
-    bands_lst:List[Bandwidt] = []
-    # TODO: prealloc to wfall memory with zapas
+    band_lst:List[Bandwidt] = []
+    
+    report_dir: Path = fr.f_path.parent / (".stageI_" + fr.f_path.stem)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    print(f"{INFO} All artifacts will be saved to: {YELLOW}{report_dir}{RESET}")
+    
+    #  w-fall prework
+    # Вирівнюємо до кратного chunk_len, щоб сесія закінчувалась цілим батчем
+    # 1. Точний розрахунок розміру сесії
+    samples_per_session = ((sz_lim_mb * 1024 * 1024 // 4) // chunk_len) * chunk_len
+    rows_per_session = samples_per_session // chunk_len
+    
+    # 2. Pre-allocation: рівно стільки, скільки батчів пройде через цикл
+    wfall_memory = np.full((rows_per_session, fft_n), -120.0, dtype=np.float32)
+    wfall_ptr = 0
+    
+    session_idx = 0
+    start_samp_pos = fr.curr_sampl_pos
+
     n_read = 0
-    pbar = tqdm(total=fr.samples_total)
+    pbar = tqdm(total=fr.samples_total, desc="Processing IQ")
     while True:
         n_read = fr.read_samples_into(f32_buf, chunk_len)
         if n_read != chunk_len or _break_req:
             break
+        curr_block_start = fr.curr_sampl_pos
         
         # 1. Вікнування (Broadcasting)
         obs = (f32_buf[0::2].reshape(batch_n, fft_n) + 
@@ -79,11 +117,22 @@ def do_file_stage_I(
         X = sfft(obs, axis=1)
         # 3. Потужність
         P_linear = np.mean((X * X.conj()).real, axis=0)
-                # 4. Центрування та логарифм
+        # 4. Центрування та логарифм
         P_shifted = np.fft.fftshift(P_linear)
         y_spec = 10.0 * np.log10(np.maximum(P_shifted, 1e-15) / _P_FS)
         y_spec_smooth = gaussian_filter1d(y_spec, sigma=sigma) if sigma else y_spec
         
+        wfall_memory[wfall_ptr, :] = y_spec
+        wfall_ptr += 1
+        if wfall_ptr >= rows_per_session:
+            save_session_artifacts_wfall(report_dir, session_idx, wfall_memory, fr.f_path.stem, Fs, Fc, start_samp_pos)
+            # Скидання для нової сесії
+            session_idx += 1
+            wfall_ptr = 0
+            start_samp_pos = fr.curr_sampl_pos
+            wfall_memory.fill(-120.0)
+            
+            
         p10 = np.percentile(y_spec, 10)
         p75 = np.percentile(y_spec, 75)
         iqr = p75 - p10
@@ -93,14 +142,13 @@ def do_file_stage_I(
             # Визначаємо адаптивний поріг детектування сигналу. 
             # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
             thr_occupance = p75 + (0.5 * iqr) 
-            h_coords =[p10, p75, thr_occupance]
             # Рахуємо кількість бінів, що перевищують цей поріг
             active_bins = np.sum(y_spec > thr_occupance)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
             occupance = active_bins / len(y_spec)
             _bnd_lst:List[Bandwidt] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
-            bands_lst.extend(_bnd_lst)
-            # TODO: push to wfall
+            if occupance*Fs > min_bw: band_lst.extend(_bnd_lst)
+
         pbar.update(chunk_len)
     
     pbar.close()
@@ -110,8 +158,21 @@ def do_file_stage_I(
         print(f"\n  {n_read=:_} not match chunk {fft_n}x{batch_n}x2. EOF, skip chunk.")
     else:
         print(f"\n  EOF")
-        
+    if wfall_ptr > 0:
+        print(f"{INFO} Saving final chunk ({wfall_ptr} rows)...")
+        # Передаємо тільки фактично заповнену частину через слайсинг [:wfall_ptr]
+        save_session_artifacts_wfall(
+            report_dir, 
+            session_idx, 
+            wfall_memory[:wfall_ptr], 
+            fr.f_path.stem, 
+            Fs, Fc, 
+            start_samp_pos
+        )
     # TODO: bands to separate files
+    if band_lst:
+       csv, _ = analyze_and_export_bands(band_lst, Fs, base_filename=fr.f_path.stem)
+       reanalyze_csv(csv)
 
 # CLI
 def _build_cli() -> argparse.ArgumentParser:
@@ -126,7 +187,7 @@ def _build_cli() -> argparse.ArgumentParser:
     )
     
     p.add_argument(
-        "--Fs", dest="Fs", type=float, default=None,
+        "--Fs", dest="samp_rate", type=float, default=None,
         help="Sample rate (Hz). Required for .bin; for .wav taken from header (if provided: must match).",
     )
     
@@ -154,6 +215,8 @@ def _build_cli() -> argparse.ArgumentParser:
         "--bw", dest="bw", type=float, default=min_bw,
         help=f"Min Target  BW (Hz). {min_bw}",
     )
+    
+    return p
 
 def handle_sigint(signum, frame):
     global _break_req
@@ -171,9 +234,9 @@ if __name__ == "__main__":
     try:
         args = _apply_vsa_file_contract(args)
         with FReader(args) as fr:
-            dur_sec = fr.samples_total / args.Fs
-            print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={args.Fs/1e3} KHz. df={1e-3*args.Fs/fft_n:.2} KHz. Dur={dur_sec:.2f} s")
-            do_file_stage_I(fr, Fs=args.Fs, Fc=args.Fc, fft_n=args.fft_n, batch_n=args.batch_n, min_bw=args.bw)
+            dur_sec = fr.samples_total / args.samp_rate
+            print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={args.samp_rate/1e6} MHz. df={1e-3*args.samp_rate/fft_n:.2} KHz. Dur={dur_sec:.2f} s")
+            do_file_stage_I(fr, Fs=args.samp_rate, Fc=args.Fc, fft_n=args.fft_n, batch_n=args.batch_n, min_bw=args.bw)
 
     except KeyboardInterrupt:
         pass

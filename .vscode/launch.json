@@ -2,6 +2,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Sateg I (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/analize_stage_I.py",
+            "args": [
+                "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
+            ]
+        },
+        {
             "name": "vsa mk II (Python)",
             "type": "debugpy",
             "request": "launch",
