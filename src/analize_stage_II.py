@@ -188,10 +188,10 @@ def do_file_stage_II(
     ln_mean = int(bursts_ln.mean())
     print(f"Burst count: {GREEN}{len(burst_list)}{RESET}. Lengt: {bursts_ln.min()} {bursts_ln.max()}; mean {ln_mean} ({1e3*ln_mean/Fs:.3f} ms). ")
     # bursts overlay
-    
-    K = n_bursts // 10
+    K = n_bursts // 50
     deep = ln_mean + ln_mean//10
     deep = int(0.75e-3 * Fs)
+    deep = 600
     # 1. Готуємо стек для сегментів
     # Використовуємо лише ті бурсти, які довші за глибину аналізу (deep)
     stack_power = []
@@ -199,12 +199,13 @@ def do_file_stage_II(
     stack_i = []
     stack_q = []
     # 1. Заповнюємо стеки (використовуємо комплексний сигнал)
+    prefix_visual = 120
     for b in burst_list[:K]:
         # if b.length >= deep:
         if 1:
             # Вирізаємо комплексний шматок для фази та I/Q
             start = b.start
-            start_offs = max(start - 120, 0)
+            start_offs = max(start - prefix_visual, 0)
             seg_iq = iq_samples[start_offs : start_offs + deep]
             # phase_data =np.angle(seg_iq)
             diff_iq = seg_iq[1:] * np.conj(seg_iq[:-1])
@@ -212,83 +213,101 @@ def do_file_stage_II(
             
             stack_power.append(p_db[start_offs :start_offs + deep])
             stack_pahse.append(phase_data)
-            stack_i.append(seg_iq.real)
-            stack_q.append(seg_iq.imag)
+            # stack_i.append(seg_iq.real)
+            # stack_q.append(seg_iq.imag)
     # 2. Перетворюємо та обчислюємо (використовуємо медіану для фази — вона стійкіша)
     stack_p_arr = np.array(stack_power)
     stack_ph_arr = np.array(stack_pahse)
-    stack_i_arr = np.array(stack_i)
-    stack_q_arr = np.array(stack_q)
+    # stack_i_arr = np.array(stack_i)
+    # stack_q_arr = np.array(stack_q)
 
-    # median_ph_vec = np.median(stack_ph_arr, axis=0)
-    # noise_std = np.std(median_ph_vec[:80])
-    # search_zone = median_ph_vec[100:200]
-    # trigger_hits = np.where(np.abs(search_zone) > noise_std * 5)[0]
-    # if len(trigger_hits) > 0:
-    #     pat_start_idx = 100 + trigger_hits[0]
-    # else:
-    #     pat_start_idx = 120 # Фолбек на точку детектора
-    # pat_end_idx = pat_start_idx + 320
-    
-    # === РЕАЛЬНА АНАЛІТИКА ===
-    med_pwr = np.median(stack_p_arr, axis=0)
-    med_ph = np.median(stack_ph_arr, axis=0)
-    
-    # 1. ШУКАЄМО СТАРТ (через поріг потужності)
-    # Беремо рівень шуму в пре-тригері (перші 50 семплів)
-    p_noise_floor = np.mean(med_pwr[:50])
-    p_signal_max = np.max(med_pwr)
-    # Поріг — середина між шумом і сигналом (або 70% підйому)
-    p_threshold = p_noise_floor + (p_signal_max - p_noise_floor) * 0.7
-    
-    # Знаходимо першу точку, де потужність реально злетіла
-    possible_starts = np.where(med_pwr > p_threshold)[0]
-    pat_start_idx = possible_starts[0] if len(possible_starts) > 0 else 120
-
-    # 2. ШУКАЄМО КІНЕЦЬ (де закінчується структура преамбули)
-    # Преамбула OFDM — це стабільна зміна фази. Дані — це хаос.
-    # Рахуємо ковзну дисперсію фази (вікно 20 семплів)
-    from scipy.ndimage import generic_filter
-    ph_var = generic_filter(med_ph, np.var, size=20)
-    
-    # Там, де дисперсія різко зростає (фаза стає шумом) — там кінець преамбули
-    # Шукаємо після старту
-    var_threshold = np.mean(ph_var[pat_start_idx : pat_start_idx+100]) * 3
-    end_candidates = np.where(ph_var[pat_start_idx+200:] > var_threshold)[0]
-    
-    if len(end_candidates) > 0:
-        pat_end_idx = pat_start_idx + 200 + end_candidates[0]
-    else:
-        pat_end_idx = pat_start_idx + 400 # фолбек
-        
+    median_ph_vec = np.median(stack_ph_arr, axis=0)
     patterns = {
         "Power (dB)": (stack_p_arr, "red"),
         "Phase (rad)": (stack_ph_arr, "green"),
-        "I Component": (stack_i_arr, "blue"),
-        "Q Component": (stack_q_arr, "orange")
+        # "I Component": (stack_i_arr, "blue"),
+        # "Q Component": (stack_q_arr, "orange")
     }
+    pat_len = 205
+    pat_start_idx = prefix_visual + 10
+    pat_end_idx = pat_start_idx + pat_len
 
-    if 1:
+    
+    # Fine tune patrern len
+    if 0:
         # 3. Візуалізація через subplots
-        fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
-        fig.suptitle(f"Burst Overlay Analysis [K={len(stack_power)}, dur {1e3*deep/Fs:.3f} ms, n_samp {deep:_} ", fontsize=16)
+        # fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
+        fig, axes = plt.subplots(len(patterns), 1, figsize=(12, 8), sharex=True)
+        fig.suptitle(f"Burst Overlay Analysis [K={len(stack_power)}, dur {1e3*deep/Fs:.3f} ms, n_samp {deep:_}.\n{pat_len=} ", fontsize=16)
+        def on_key(event):
+            if event.key == 'escape':
+                plt.close(event.canvas.figure)
+                print(f"{INFO} Figure closed by Escape key.")
 
+        # Підключаємо обробник до поточної фігури
+        fig.canvas.mpl_connect('key_press_event', on_key)
         for ax, (title, (data, clr)) in zip(axes, patterns.items()):
             # Фоновий розкид (перші 30 штук)
             for i in range(min(len(data), 30)):
                 ax.plot(data[i], color='gray', alpha=0.05)
             
-            # Головний паттерн (Медіана — щоб прибрати викиди)
-            ax.plot(np.median(data, axis=0), color=clr, linewidth=.75, label='Median Pattern')
+            # Головний паттерн (Медіана)
+            ax.plot(np.median(data, axis=0),color=clr, linewidth=.75, label='Median Pattern',
+                    marker="o", markersize=1.5, markevery=4)
             ax.set_title(title)
             ax.grid(True, alpha=0.2)
             # ax.legend(loc='upper right')
             ax.axvline(pat_start_idx, color='magenta', linestyle='--', label=f'START({pat_start_idx})')
-            ax.axvline(pat_end_idx, color='cyan', linestyle='--', label=f'END({pat_end_idx})')
+            ax.axvline(pat_end_idx, color='magenta', linestyle='--', label=f'END({pat_end_idx})')
         plt.xlabel("Samples from Start")
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
     
+    gold_pattern = median_ph_vec[pat_start_idx : pat_end_idx]
+    # Corelation of gold_pattern
+    if 1:
+        # 1. Визначаємо точку відліку - початок K-го бурсту
+        K_idx = n_bursts // 50
+        target_burst_start = burst_list[K_idx].start
+        
+        # Беремо весь шматок від 0 до точки детекції K-го бурсту (+ запас для видимості самого бурсту)
+        search_end = min(target_burst_start + deep, len(iq_samples))
+        search_iq = iq_samples[0 : search_end]
+        
+        # Обчислюємо диференціальну фазу для всього шматка
+        # Використовуємо ту саму логіку, що і для gold_pattern
+        search_diff_ph = np.angle(search_iq[1:] * np.conj(search_iq[:-1]))
+        
+        # 2. Кореляція
+        # mode='same' щоб зберегти індексацію часу (центр шаблону)
+        corr_res = np.correlate(search_diff_ph, gold_pattern, mode='same')
+        corr_mag = np.abs(corr_res)
+
+        # 3. Візуалізація
+        fig, axes = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+        fig.suptitle(f"Long-range Correlation: 0 to Burst #{K_idx}", fontsize=16)
+
+        # Фаза сигналу
+        axes[0].plot(search_diff_ph, color='green', linewidth=0.3)
+        axes[0].set_title("Differential Phase (0 : K_start)")
+        axes[0].grid(True, alpha=0.2)
+
+        # Магнітуда кореляції
+        axes[1].plot(corr_mag, color='red', linewidth=0.8)
+        axes[1].set_title("Correlation Peaks")
+        axes[1].grid(True, alpha=0.2)
+
+        def on_key(event):
+            if event.key == 'escape':
+                plt.close(event.canvas.figure)
+                print(f"{INFO} Figure closed by Escape key.")
+        
+        fig.canvas.mpl_connect('key_press_event', on_key)
+
+        plt.xlabel("Samples from File Start")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+        
     if 0:
 
         N = 100_000
