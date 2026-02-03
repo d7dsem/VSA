@@ -38,12 +38,11 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.fft import fft as sfft
 from scipy.signal import find_peaks
 
-from colorizer import colorize, inject_colors_into
 
 from helpers import Bandwidt, analyze_and_export_bands, find_bands, reanalyze_csv
 from io_stuff import FReader
 from vsa import VSA, CMapType, ControledVidget, deploy_layout
-# from vsa import VSA
+from colorizer import colorize, inject_colors_into
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -123,7 +122,6 @@ def do_vsa_file(
     else:
         mask = slice(None) 
     freq_bins_view = freq_bins_full[mask]
-    dF = Fs/fft_n
     dur_ms = 1e3 * batch_n*fft_n / Fs
     title_base = f"File: {fr.f_path.stem} | SR: {Fs/1e6} MHz | {batch_n=}, {fft_n=:_} {dur_ms=:.3f} | dF: {dF/1e3} KHz |"
     
@@ -283,50 +281,32 @@ def _build_cli() -> argparse.ArgumentParser:
     )
 
     p.add_argument(
-        "-i", "--input",
-        dest="file",
-        type=Path,
-        required=True,
+        "-i", "--input", dest="file", type=Path, required=True,
         help="Path to IQ file: .bin or .wav",
     )
 
     p.add_argument(
-        "--samp-rate",
-        dest="samp_rate",
-        type=float,
-        default=None,
+        "--samp-rate", dest="samp_rate", type=float, default=None,
         help="Sample rate (Hz). Required for .bin; for .wav taken from header (if provided: must match).",
     )
 
     p.add_argument(
-        "--samp-offs",
-        dest="samp_offs",
-        type=int,
-        default=0,
+        "--samp-offs", dest="samp_offs", type=int, default=0,
         help="Sample offset in IQ samples (I/Q pairs). 1 sample = 4 bytes for int16 IQ.",
     )
 
     p.add_argument(
-        "--dtype",
-        dest="dtype",
-        type=str,
-        default="int16",
+        "--dtype", dest="dtype", type=str, default="int16",
         help="Expected sample dtype. For .wav mismatch -> exception. (Current reader: int16 only)",
     )
 
     p.add_argument(
-        "--center-freq",
-        dest="center_freq",
-        type=float,
-        default=0.0,
+        "--center-freq", dest="center_freq", type=float, default=0.0,
         help="Center frequency (Hz). Default: 0",
     )
 
     p.add_argument(
-        "--fft-n",
-        dest="fft_n",
-        type=int,
-        default=4096,
+        "--fft-n", dest="fft_n", type=int, default=4096,
         help="FFT size. Default: 4096",
     )
 
@@ -384,7 +364,7 @@ def handle_sigint(signum, frame):
 if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
-    signal.signal(signal.SIGINT, handle_sigint)
+    # signal.signal(signal.SIGINT, handle_sigint)
     reanalyze_csv(r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant_20260202_225227.csv ", 10e6)
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
