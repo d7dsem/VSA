@@ -1,0 +1,21 @@
+============================================================
+                OFDM SIGNAL ANALYTICS REPORT                
+============================================================
+Generated:      2026-02-04 22:31:30
+Total packets:  290
+Freq span:      -3.90 to 3.94 MHz
+Avg Bandwidth:  7785.41 kHz
+Max Bandwidth:  8061.52 kHz
+
+--- TOP ACTIVE CHANNELS ---
+Freq:   -0.000 MHz | Hits:  277
+Freq:    3.900 MHz | Hits:    2
+Freq:   -3.900 MHz | Hits:    1
+Freq:   -3.800 MHz | Hits:    1
+Freq:   -3.700 MHz | Hits:    1
+
+--- TIMING (ms) ---
+Min gap:    0.00
+Median gap: 0.10
+Max gap:    0.10
+============================================================

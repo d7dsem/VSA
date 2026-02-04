@@ -22,6 +22,7 @@ from scipy.ndimage import binary_opening, binary_closing
 from analize_stage_I import _form_artefact_folder_path
 from constell import ConstellationPlot
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
+from gui_widgets import select_signal_region
 from helpers import print_ascii_hist
 from io_stuff import FReader
 
@@ -254,8 +255,10 @@ def do_file_stage_II(
                 # norm_chunk = seg_iq
                 const_plot.update(norm_chunk, f"Burst {i:_} of {K:_}")
                 plt.pause(0.001)
-            if stack_i: stack_i.append(seg_iq.real)
-            if stack_q: stack_q.append(seg_iq.imag)
+            if stack_i is not None: 
+                stack_i.append(seg_iq.real)
+            if stack_q is not None: 
+                stack_q.append(seg_iq.imag)
     # 2. Перетворюємо та обчислюємо (використовуємо медіану для фази — вона стійкіша)
     stack_p_arr = np.array(stack_power)
     stack_ph_arr = np.array(stack_pahse)
@@ -274,6 +277,16 @@ def do_file_stage_II(
     pat_start_idx = prefix_visual + 10
     pat_end_idx = pat_start_idx + pat_len
 
+    s, e = (86, 141)
+    sel_rv = None
+    # sel_rv = select_signal_region(patterns)
+    
+    if sel_rv is None:
+        print(f"Selected Patterm Span. Fallback to default!  s, e = {s}, {e}")
+        sel_rv = (s, e)
+    else:
+        s, e = sel_rv
+        print(f"Selected span: s, e = {s}, {e}")
     # Burst Overlay Analysis: Fine tune patrern len scaffold
     if 1:
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1330000000Hz_15-57-04_02-02-2026_2ant
@@ -301,27 +314,29 @@ def do_file_stage_II(
             ax.set_title(title)
             ax.grid(True, alpha=0.2)
             # ax.legend(loc='upper right')
-            ax.axvline(pat_start_idx, color='magenta', linestyle='--', label=f'START({pat_start_idx})')
-            ax.axvline(pat_end_idx, color='magenta', linestyle='--', label=f'END({pat_end_idx})')
+            if s: ax.axvline(s, color='magenta', linestyle='--', linewidth=0.75, label=f'START({s})')
+            if e: ax.axvline(e, color='magenta', linestyle='--', linewidth=0.75, label=f'END({e})')
             ax.axvline(burst_end_idx, color='cyan', linestyle='--', label=f'END({burst_end_idx})')
         plt.xlabel("Samples from Start")
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
     
-    gold_pattern: np.ndarray = median_ph_vec[pat_start_idx : pat_end_idx]
-    pat_file = fr.f_path.parent / f"pre_pat_{fr.f_path.stem}.json"
-    with open(pat_file, "w") as f:
-        phase_pattern = gold_pattern.tolist()
-        pat_info = {
-            "Fs": f"{Fs/1e6:.1f} MHz",
-            "len": len(gold_pattern),
-            "dur": f"{len(gold_pattern) / Fs: .3f} ms",
-            "phase_pattern" : phase_pattern
-        }
-        json.dump(pat_info, f, indent=4)
-
+    if sel_rv:
+        gold_pattern: np.ndarray = median_ph_vec[s : e]
+        pat_file = fr.f_path.parent / f"pre_pat_{fr.f_path.stem}.json"
+        with open(pat_file, "w") as f:
+            phase_pattern = gold_pattern.tolist()
+            pat_info = {
+                "Fs": f"{Fs/1e6:.1f} MHz",
+                "len": len(gold_pattern),
+                "dur": f"{len(gold_pattern) / Fs: .3f} ms",
+                "phase_pattern" : phase_pattern
+            }
+            json.dump(pat_info, f, indent=4)
+    else:
+        gold_pattern: np.ndarray = median_ph_vec[86 : 141]
     # Corelation of gold_pattern
-    if 0:
+    if 1:
         # 1. Визначаємо точку відліку - початок K-го бурсту
         K_idx = n_bursts // 50
         target_burst_start = burst_list[K_idx].start
