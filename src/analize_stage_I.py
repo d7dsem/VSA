@@ -1,4 +1,7 @@
 # src/analize_stage_I.py
+
+# PS hint
+# ls e:\home\d7\Public\signals\OFDM\*wav | % {py analize_stage_I.py -i $_}
 import sys, os
 import argparse
 from pathlib import Path
@@ -66,8 +69,10 @@ def _save_burst_pack(fr: FReader, f_key: int, folder: Path, burst_packs: Dict[in
     initial_sample_pos = fr.curr_sampl_pos
     
     packs = sorted(burst_packs[f_key], key=lambda x: x.start_samp_pos)
-    out_path = folder / f"bw_{f_key}.bin"
-    
+    out_path = folder / f"bw_{f_key/1e6:.2f}MHz_Fs_{fr.Fs/1e6}MHz.bin"
+    if len(packs) == 0:
+        print(f"  {f_key/1e6:8.2f} MHz -> {RED} no data{RESET}")
+        return
     try:
         with open(out_path, 'wb') as f_out:
             for p in packs:
@@ -123,20 +128,23 @@ def do_file_stage_I(
     report_dir.mkdir(parents=True, exist_ok=True)
     cashed_bw = _form_bwbusrt_file_path(fr.f_path, fft_n, batch_n)
     
-    print(f"{INFO} Artifacts store: {YELLOW}{report_dir}{RESET}")
     if cashed_bw.exists():
+        print(f"{INFO} Artifacts store: {YELLOW}{report_dir}{RESET}")
         band_lst = load_bursts(cashed_bw)
         if band_lst:
             # reanalyze_csv(csv, fs=Fs)
             # sort by start idx and make dict where centre is key and val is list of bands
             burst_packs = aggregate_to_packs(band_lst, chunk_len, fr.samples_total, Fs, verbose=True)
-            analyze_pack_intervals(burst_packs, Fs, verbose=True)
-            baseband_pack = burst_packs.get(0, None)
-            pack_cnt = len(baseband_pack)
-            if pack_cnt:
-                _save_burst_pack(fr, f_key=0, folder=report_dir, burst_packs=burst_packs)
-                print()
-                return
+            # analyze_pack_intervals(burst_packs, Fs, verbose=True)
+            for f_key in burst_packs.keys():
+                _save_burst_pack(fr, f_key=f_key, folder=report_dir, burst_packs=burst_packs)
+        else:
+            print(f"{WARN} No data finded on firs run try with manualy adjust detection parameters.")
+            cashed_bw.unlink()
+        print()
+        return
+
+            
     #  w-fall prework
     # Вирівнюємо до кратного chunk_len, щоб сесія закінчувалась цілим батчем
     # 1. Точний розрахунок розміру сесії
@@ -188,12 +196,13 @@ def do_file_stage_I(
             # --- РОЗРАХУНОК OCCUPANCE ---
             # Визначаємо адаптивний поріг детектування сигналу. 
             # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
-            thr_occupance = pHigh + (0.5 * iqr) 
+            # thr = pHigh + (0.25 * iqr)    # freq ocupance < 0.75*Fs
+            thr = pHigh - (0.25 * iqr)      # freq ocupance > 0.75*Fs
             # Рахуємо кількість бінів, що перевищують цей поріг
-            active_bins = np.sum(y_spec > thr_occupance)
+            active_bins = np.sum(y_spec > thr)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
             occupance = active_bins / len(y_spec)
-            _bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr_occupance)
+            _bnd_lst:List[BandwidtBurst] = find_bands(y_spec_smooth, freq_bins_full, thr)
             if occupance*Fs > min_bw:
                 for bnd in _bnd_lst: bnd.start_samp_pos = fr.curr_sampl_pos
                 band_lst.extend(_bnd_lst)
@@ -220,7 +229,7 @@ def do_file_stage_I(
         )
     
     save_bursts(band_lst, cashed_bw)
-    # TODO: bands to separate files
+    print(f"Run again with same params for proccess cashed data.\n\n")
 
 
 # CLI

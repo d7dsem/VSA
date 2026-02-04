@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import csv
 from datetime import datetime
@@ -15,6 +15,42 @@ GRAY: str; BRIGHT_GRAY: str; CYAN: str; BRIGHT_CYAN: str
 BLUE: str; BRIGHT_BLUE: str; MAGENTA: str; BRIGHT_MAGENTA: str
 WHITE: str; BRIGHT_WHITE: str; RESET: str; WARN: str; ERR: str; INFO: str; DBG: str
 inject_colors_into(globals())
+
+
+def print_ascii_hist(data: np.ndarray, Fs: float | None = None, bins: int = 20, width: int = 50):
+    if data.size == 0: 
+        return
+    
+    counts, bin_edges = np.histogram(data, bins=bins)
+    max_count = counts.max()
+    
+    # Формуємо заголовок залежно від наявності Fs
+    header = f"\n{'Length Range':<20} | {'Count':<6} | {'Distribution':<{width}}"
+    if Fs is not None:
+        header += " | Duration"
+    
+    print(header)
+    print("-" * len(header))
+    
+    for i in range(bins):
+        # 1. Текстовий діапазон семплів
+        range_str = f"{int(bin_edges[i]):>8} - {int(bin_edges[i+1]):<8}"
+        
+        # 2. ASCII-бар з фіксованою шириною (padding)
+        bar_len = int(counts[i] * width / max_count) if max_count > 0 else 0
+        bar = "#" * bar_len
+        pad = " " * (width - bar_len)
+        
+        # 3. Базовий рядок
+        ts = f"{range_str} | {counts[i]:<6} | {bar}{pad}"
+        
+        # 4. Додаємо час, якщо є Fs
+        if Fs is not None:
+            bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+            dur_ms = (bin_center / Fs) * 1000
+            ts += f" | ~{dur_ms:8.3f} ms"
+            
+        print(ts)
 
 @dataclass
 class BandwidtBurst:
@@ -185,7 +221,7 @@ def analyze_pack_intervals(
     Fs: float,
     verbose=True
 ):
-    print(f"\n{MAGENTA}--- Interval Analysis (Timing Patterns) ---{RESET}")
+    print(f"--- Interval Analysis (Timing Patterns) ---")
     
     for f_key, packs in packs_dict.items():
         if len(packs) < 2:
@@ -217,9 +253,7 @@ def analyze_pack_intervals(
             # Статистика розкиду
             print(f"  Stats: min={np.min(intervals_ms):.2f}ms, max={np.max(intervals_ms):.2f}ms, avg={np.mean(intervals_ms):.2f}ms")
 
-    print(f"{MAGENTA}-------------------------------------------{RESET}")
-    
-    
+
 #  Legasy scaffold
 def analyze_hops_and_timing(bands: List[BandwidtBurst], fs: float):
     if len(bands) < 2:
@@ -336,6 +370,29 @@ def analyze_and_export_bands(bands: List[BandwidtBurst], fs: float, base_filenam
 
 import pandas as pd
 import numpy as np
+
+def load_gold_pattern(file_path: str|Path)->Tuple[float, np.ndarray]:
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    # Перетворюємо список пар [real, imag] назад у комплексний масив numpy
+    phase_pattern = np.array(data["phase_pattern"], dtype=np.float64)
+    # 2. Безпечний парсинг Fs
+    fs_str = str(data.get("Fs", "0")).upper()
+    # Витягуємо тільки числову частину
+    import re
+    val_match = re.search(r"[-+]?\d*\.\d+|\d+", fs_str)
+    val = float(val_match.group()) if val_match else 0.0
+    
+    # Визначаємо множник
+    multiplier = 1.0
+    if "MHZ" in fs_str:
+        multiplier = 1e6
+    elif "KHZ" in fs_str:
+        multiplier = 1e3
+        
+    fs_val = val * multiplier
+    return fs_val, phase_pattern
 
 def analyze_dwell_time(df, fs):
     # 1. Визначаємо, коли частота змінилася

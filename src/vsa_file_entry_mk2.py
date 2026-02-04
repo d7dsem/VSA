@@ -39,7 +39,7 @@ from scipy.fft import fft as sfft
 from scipy.signal import find_peaks
 
 
-from helpers import BandwidtBurst, analyze_and_export_bands, find_bands, reanalyze_csv
+from helpers import BandwidtBurst, analyze_and_export_bands, find_bands
 from io_stuff import FReader
 from vsa import VSA, CMapType, ControledVidget, deploy_layout
 from colorizer import colorize, inject_colors_into
@@ -174,17 +174,19 @@ def do_vsa_file(
         
         # Depends on signal record BW and need msnual adjuct
         p10 = np.percentile(y_spec, 10)
-        pHigh = np.percentile(y_spec, 50) # 75
+        pHigh = np.percentile(y_spec, 40) # 75
         iqr = pHigh - p10
         has_sign = iqr > threshold_iqr
         v_lines = []
-
+        h_coords =[p10, pHigh]
         if has_sign:
             # --- РОЗРАХУНОК OCCUPANCE ---
             # Визначаємо адаптивний поріг детектування сигналу. 
             # p75 + 0.5*iqr — це досить чутливий поріг, який адаптується під рівень шуму.
-            thr = pHigh + (0.25 * iqr) 
-            h_coords =[pHigh, thr]
+            
+            # thr = pHigh + (0.25 * iqr)    # freq ocupance < 0.75*Fs
+            thr = pHigh - (0.25 * iqr)      # freq ocupance > 0.75*Fs
+            h_coords.append(thr)
             # Рахуємо кількість бінів, що перевищують цей поріг
             active_bins = np.sum(y_spec > thr)
             # Occupance — це відношення активних бінів до загальної кількості (від 0.0 до 1.0)
@@ -368,7 +370,7 @@ if __name__ == "__main__":
     os.system("")  # Colorizing 'on'
     # Стандартна ініціалізація
     # signal.signal(signal.SIGINT, handle_sigint)
-    reanalyze_csv(r"D:\C\Repo\signals_data\OFDM\baseband_1330000000Hz_15-47-10_02-02-2026_2ant_20260202_225227.csv ", 10e6)
+    
     args: argparse.Namespace = None
     if len(sys.argv) > 1:
         # show_cli()

@@ -1,9 +1,11 @@
 # src/analize_stage_I.py
 from dataclasses import dataclass
+import json
 import sys, os
 import argparse
 from pathlib import Path
 import signal
+from time import monotonic
 import traceback
 from typing import Dict, List, Literal, Optional
 from tqdm import tqdm
@@ -15,9 +17,12 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.fft import fft as sfft
 from scipy.signal import find_peaks
 from scipy.ndimage import uniform_filter1d
-
+from scipy.ndimage import binary_opening, binary_closing
+    
 from analize_stage_I import _form_artefact_folder_path
+from constell import ConstellationPlot
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
+from helpers import print_ascii_hist
 from io_stuff import FReader
 
 
@@ -114,7 +119,7 @@ def do_file_stage_II(
     Fs: float,
     Fc: float = Fc,
     # seconds
-    est_burst_dur: float = 0.2e-5,
+    wnd_analize_dur: float = 0.2e-5,
     thr_db: float = 10.0,
     
     seq_dur_min: float = 0.000020,
@@ -126,16 +131,18 @@ def do_file_stage_II(
 
     # 1. Переклад тривалості в кількість семплів (цілі числа)
     # n = duration * Fs
-    ln_burst = int(est_burst_dur * Fs)
+    ln_burst = int(wnd_analize_dur * Fs)
     W = max(16, ln_burst // 4)  # Вікно W
     step = max(4, W // 4)      # Крок
     n_min = int(seq_dur_min * Fs)
     n_max = int(seq_dur_max * Fs)
 
-    print(f"{INFO} Base burst dur: {CYAN}{est_burst_dur*1e6}{RESET} us -> W={W} samples")
+    print(f"{INFO} Energy-based Burst Detection with Sliding Window Averaging and Morphological Cleaning"
+         f"\n      Window {GREEN}{W}{RESET} samples <=> {CYAN}{wnd_analize_dur*1e3}{RESET} ms."
+         f"\n      Start search...")
     # print(f"  Search SEQ range: {CYAN}{seq_dur_min*1e6:.1f} - {seq_dur_max*1e6:.1f}{RESET} us")
     # print(f"  Samples range: {YELLOW}{n_min} - {n_max}{RESET} samples")
-    
+    t0 = monotonic()
     n_read = 0
     # pbar = tqdm(total=fr.samples_total, desc="Processing IQ")
 
@@ -155,11 +162,9 @@ def do_file_stage_II(
     # 1. Створюємо базову логічну маску
     mask = (tst_arr > thr)
 
-    # 2. Твій критерій "дивитись ліворуч/праворуч":
+    # 2. "дивитись ліворуч/праворуч":
     # Використовуємо морфологічне відкриття (opening), щоб прибрати "пчихи" на шумі,
     # та закриття (closing), щоб прибрати "дірки" в бурсті.
-    from scipy.ndimage import binary_opening, binary_closing
-
     # 'K' - це кількість точок для перевірки (спробуй W чи W//2)
     K = W 
     # Спочатку зшиваємо дрібні провали (прибираємо сині лінії всередині)
@@ -186,65 +191,104 @@ def do_file_stage_II(
 
     bursts_ln = np.array([b.length for b in burst_list])
     ln_mean = int(bursts_ln.mean())
-    print(f"Burst count: {GREEN}{len(burst_list)}{RESET}. Lengt: {bursts_ln.min()} {bursts_ln.max()}; mean {ln_mean} ({1e3*ln_mean/Fs:.3f} ms). ")
+    dur_search = monotonic() - t0
+    
+    # print_ascii_hist(bursts_ln, Fs)
+    print(f"{INFO} Burst count: {GREEN}{len(burst_list)}{RESET}. Lengt: {bursts_ln.min()} {bursts_ln.max()}; mean {ln_mean} ({1e3*ln_mean/Fs:.3f} ms). [TIW: {dur_search*1e3:.2f} ms]")
+
     # bursts overlay
-    K = n_bursts // 50
-    deep = ln_mean + ln_mean//10
-    deep = int(0.75e-3 * Fs)
-    deep = 600
+    prefix_visual = int(0.025e-3*Fs)
+    K = n_bursts - 1
+    # K //= 50
+    BURST_DUR = 0.72e-3 
+    _overlay_wnd = ln_mean + ln_mean//10
+    _overlay_wnd = int(BURST_DUR * Fs) # look for whole 0.72 ms
+    # _overlay_wnd = 600 # slook to start
+    _overlay_wnd += 2 * prefix_visual
+
+    
     # 1. Готуємо стек для сегментів
     # Використовуємо лише ті бурсти, які довші за глибину аналізу (deep)
     stack_power = []
     stack_pahse = []
+    stack_i = stack_q = None
     stack_i = []
     stack_q = []
-    # 1. Заповнюємо стеки (використовуємо комплексний сигнал)
-    prefix_visual = 120
-    for b in burst_list[:K]:
+
+    normalize = 32768.0
+    # Try constell
+    const_plot = None
+    # const_plot = ConstellationPlot(fr.f_path)
+    if const_plot:
+        plt.ion()
+        const_plot.show()
+        chunk_len = 1000
+        
+        for i in range(0, len(iq_samples), chunk_len):
+            # 1. Беремо зріз (це все ще int16)
+            seg_iq = iq_samples[i : i + chunk_len]
+            if seg_iq.size == 0: break
+            norm_chunk = seg_iq / normalize
+            if not np.iscomplexobj(norm_chunk):
+                # Пакуємо: парні - Real, непарні - Imag
+                norm_chunk = norm_chunk[0::2] + 1j * norm_chunk[1::2]
+            const_plot.update(norm_chunk, f"Offset: {i:_}")
+            plt.pause(0.001)
+            
+    for i, b in enumerate(burst_list[:K]):
         # if b.length >= deep:
         if 1:
             # Вирізаємо комплексний шматок для фази та I/Q
             start = b.start
             start_offs = max(start - prefix_visual, 0)
-            seg_iq = iq_samples[start_offs : start_offs + deep]
+            seg_iq = iq_samples[start_offs : start_offs + _overlay_wnd]
             # phase_data =np.angle(seg_iq)
             diff_iq = seg_iq[1:] * np.conj(seg_iq[:-1])
             phase_data = np.angle(diff_iq)
             
-            stack_power.append(p_db[start_offs :start_offs + deep])
+            stack_power.append(p_db[start_offs :start_offs + _overlay_wnd])
             stack_pahse.append(phase_data)
-            # stack_i.append(seg_iq.real)
-            # stack_q.append(seg_iq.imag)
+            
+            if const_plot: 
+                norm_chunk = seg_iq / normalize
+                # norm_chunk = seg_iq
+                const_plot.update(norm_chunk, f"Burst {i:_} of {K:_}")
+                plt.pause(0.001)
+            if stack_i: stack_i.append(seg_iq.real)
+            if stack_q: stack_q.append(seg_iq.imag)
     # 2. Перетворюємо та обчислюємо (використовуємо медіану для фази — вона стійкіша)
     stack_p_arr = np.array(stack_power)
     stack_ph_arr = np.array(stack_pahse)
-    # stack_i_arr = np.array(stack_i)
-    # stack_q_arr = np.array(stack_q)
+    stack_i_arr = np.array(stack_i)
+    stack_q_arr = np.array(stack_q)
 
-    median_ph_vec = np.median(stack_ph_arr, axis=0)
+    median_ph_vec: np.ndarray = np.median(stack_ph_arr, axis=0)
     patterns = {
         "Power (dB)": (stack_p_arr, "red"),
         "Phase (rad)": (stack_ph_arr, "green"),
-        # "I Component": (stack_i_arr, "blue"),
-        # "Q Component": (stack_q_arr, "orange")
+        "I Component": (stack_i_arr, "blue"),
+        "Q Component": (stack_q_arr, "orange")
     }
+    # Pattern of dPhase template params /In samples/
     pat_len = 205
     pat_start_idx = prefix_visual + 10
     pat_end_idx = pat_start_idx + pat_len
 
-    
-    # Fine tune patrern len
-    if 0:
-        # 3. Візуалізація через subplots
+    # Burst Overlay Analysis: Fine tune patrern len scaffold
+    if 1:
+        # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1330000000Hz_15-57-04_02-02-2026_2ant
+        # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1331012500Hz_16-46-58_02-02-2026
+        burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _5MHz-11-14-25
         # fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
         fig, axes = plt.subplots(len(patterns), 1, figsize=(12, 8), sharex=True)
-        fig.suptitle(f"Burst Overlay Analysis [K={len(stack_power)}, dur {1e3*deep/Fs:.3f} ms, n_samp {deep:_}.\n{pat_len=} ", fontsize=16)
+        f_id = f"{fr.f_path.parent.name}/{fr.f_path.name}"
+        fig.suptitle(f"Burst Overlay Analysis. File: {f_id}. Burst dur: {BURST_DUR*1e3:.2f} ms."
+                     f"\nK={len(stack_power)}, dur {1e3*_overlay_wnd/Fs:.3f} ms, n_samp {_overlay_wnd:_}, {pat_len=} ", fontsize=12)
         def on_key(event):
             if event.key == 'escape':
                 plt.close(event.canvas.figure)
                 print(f"{INFO} Figure closed by Escape key.")
 
-        # Підключаємо обробник до поточної фігури
         fig.canvas.mpl_connect('key_press_event', on_key)
         for ax, (title, (data, clr)) in zip(axes, patterns.items()):
             # Фоновий розкид (перші 30 штук)
@@ -259,19 +303,31 @@ def do_file_stage_II(
             # ax.legend(loc='upper right')
             ax.axvline(pat_start_idx, color='magenta', linestyle='--', label=f'START({pat_start_idx})')
             ax.axvline(pat_end_idx, color='magenta', linestyle='--', label=f'END({pat_end_idx})')
+            ax.axvline(burst_end_idx, color='cyan', linestyle='--', label=f'END({burst_end_idx})')
         plt.xlabel("Samples from Start")
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
     
-    gold_pattern = median_ph_vec[pat_start_idx : pat_end_idx]
+    gold_pattern: np.ndarray = median_ph_vec[pat_start_idx : pat_end_idx]
+    pat_file = fr.f_path.parent / f"pre_pat_{fr.f_path.stem}.json"
+    with open(pat_file, "w") as f:
+        phase_pattern = gold_pattern.tolist()
+        pat_info = {
+            "Fs": f"{Fs/1e6:.1f} MHz",
+            "len": len(gold_pattern),
+            "dur": f"{len(gold_pattern) / Fs: .3f} ms",
+            "phase_pattern" : phase_pattern
+        }
+        json.dump(pat_info, f, indent=4)
+
     # Corelation of gold_pattern
-    if 1:
+    if 0:
         # 1. Визначаємо точку відліку - початок K-го бурсту
         K_idx = n_bursts // 50
         target_burst_start = burst_list[K_idx].start
         
         # Беремо весь шматок від 0 до точки детекції K-го бурсту (+ запас для видимості самого бурсту)
-        search_end = min(target_burst_start + deep, len(iq_samples))
+        search_end = min(target_burst_start + _overlay_wnd, len(iq_samples))
         search_iq = iq_samples[0 : search_end]
         
         # Обчислюємо диференціальну фазу для всього шматка
