@@ -21,6 +21,7 @@ from scipy.ndimage import binary_opening, binary_closing
     
 from analize_stage_I import _form_artefact_folder_path
 from constell import ConstellationPlot
+from correlation_inspector import inspect_correlation
 from fft_core import INT16_FULL_SCALE, IQInterleavedF32
 from gui_widgets import select_signal_region
 from helpers import print_ascii_hist
@@ -288,7 +289,7 @@ def do_file_stage_II(
         s, e = sel_rv
         print(f"Selected span: s, e = {s}, {e}")
     # Burst Overlay Analysis: Fine tune patrern len scaffold
-    if 1:
+    if 0:
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1330000000Hz_15-57-04_02-02-2026_2ant
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1331012500Hz_16-46-58_02-02-2026
         burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _5MHz-11-14-25
@@ -335,8 +336,11 @@ def do_file_stage_II(
             json.dump(pat_info, f, indent=4)
     else:
         gold_pattern: np.ndarray = median_ph_vec[86 : 141]
+    
     # Corelation of gold_pattern
     if 1:
+        inspect_correlation(iq_samples[:int(4.5e4)], gold_pattern, Fs)
+    if 0:
         # 1. Визначаємо точку відліку - початок K-го бурсту
         K_idx = n_bursts // 50
         target_burst_start = burst_list[K_idx].start
