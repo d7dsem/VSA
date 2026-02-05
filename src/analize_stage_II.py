@@ -30,6 +30,7 @@ from io_stuff import FReader
 
 from vsa_file_entry import _apply_vsa_file_contract, show_cli
 from colorizer import colorize, inject_colors_into
+from vsa_pro import deploy_vsa_pro
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -203,6 +204,7 @@ def do_file_stage_II(
     K = n_bursts - 1
     # K //= 50
     BURST_DUR = 0.72e-3 
+
     _overlay_wnd = ln_mean + ln_mean//10
     _overlay_wnd = int(BURST_DUR * Fs) # look for whole 0.72 ms
     # _overlay_wnd = 600 # slook to start
@@ -238,28 +240,41 @@ def do_file_stage_II(
             plt.pause(0.001)
             
     for i, b in enumerate(burst_list[:K]):
-        # if b.length >= deep:
-        if 1:
-            # Вирізаємо комплексний шматок для фази та I/Q
-            start = b.start
-            start_offs = max(start - prefix_visual, 0)
-            seg_iq = iq_samples[start_offs : start_offs + _overlay_wnd]
-            # phase_data =np.angle(seg_iq)
-            diff_iq = seg_iq[1:] * np.conj(seg_iq[:-1])
-            phase_data = np.angle(diff_iq)
+        # Вирізаємо комплексний шматок для фази та I/Q
+        start = b.start
+        start_offs = max(start - prefix_visual, 0)
+        
+        # Отримуємо зрізи
+        seg_iq = iq_samples[start_offs : start_offs + _overlay_wnd]
+        seg_pwr = p_db[start_offs : start_offs + _overlay_wnd]
+
+        # --- DISCARD LOGIC (Happy Path Protection) ---
+        if seg_iq.size < _overlay_wnd:
+            print(f"{WARN} Discard burst {i:_}/{K:_}: segment too short at EOF. "
+                  f"Got {seg_iq.size} smp, expected {_overlay_wnd}. Offset: {start_offs}")
+            continue
+        # ---------------------------------------------
+
+        # Розрахунок диференційної фази
+        diff_iq = seg_iq[1:] * np.conj(seg_iq[:-1])
+        phase_data = np.angle(diff_iq)
+        
+        # Тепер ми впевнені, що довжина seg_pwr однакова для всіх
+        stack_power.append(seg_pwr)
+        
+        # УВАГА: phase_data ЗАВЖДИ на 1 коротша за seg_iq через diff.
+        # Щоб np.array(stack_pahse) не впав, довжина має бути константною (_overlay_wnd - 1)
+        stack_pahse.append(phase_data)
+        
+        if const_plot: 
+            norm_chunk = seg_iq / normalize
+            const_plot.update(norm_chunk, f"Burst {i:_} of {K:_}")
+            plt.pause(0.001)
             
-            stack_power.append(p_db[start_offs :start_offs + _overlay_wnd])
-            stack_pahse.append(phase_data)
-            
-            if const_plot: 
-                norm_chunk = seg_iq / normalize
-                # norm_chunk = seg_iq
-                const_plot.update(norm_chunk, f"Burst {i:_} of {K:_}")
-                plt.pause(0.001)
-            if stack_i is not None: 
-                stack_i.append(seg_iq.real)
-            if stack_q is not None: 
-                stack_q.append(seg_iq.imag)
+        if stack_i is not None: 
+            stack_i.append(seg_iq.real)
+        if stack_q is not None: 
+            stack_q.append(seg_iq.imag)
     # 2. Перетворюємо та обчислюємо (використовуємо медіану для фази — вона стійкіша)
     stack_p_arr = np.array(stack_power)
     stack_ph_arr = np.array(stack_pahse)
@@ -289,13 +304,14 @@ def do_file_stage_II(
         s, e = sel_rv
         print(f"Selected span: s, e = {s}, {e}")
     # Burst Overlay Analysis: Fine tune patrern len scaffold
+    f_id = f"{fr.f_path.parent.name}/{fr.f_path.name}"
     if 0:
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1330000000Hz_15-57-04_02-02-2026_2ant
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1331012500Hz_16-46-58_02-02-2026
         burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _5MHz-11-14-25
         # fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
         fig, axes = plt.subplots(len(patterns), 1, figsize=(12, 8), sharex=True)
-        f_id = f"{fr.f_path.parent.name}/{fr.f_path.name}"
+        
         fig.suptitle(f"Burst Overlay Analysis. File: {f_id}. Burst dur: {BURST_DUR*1e3:.2f} ms."
                      f"\nK={len(stack_power)}, dur {1e3*_overlay_wnd/Fs:.3f} ms, n_samp {_overlay_wnd:_}, {pat_len=} ", fontsize=12)
         def on_key(event):
@@ -337,6 +353,13 @@ def do_file_stage_II(
     else:
         gold_pattern: np.ndarray = median_ph_vec[86 : 141]
     
+
+    show_cnt = int((BURST_DUR * 10) * Fs) + 2*prefix_visual
+    _ = deploy_vsa_pro(iq_samples[:show_cnt], fr.Fs,
+                    file_id=f_id,
+                    phase_preamb_patern=gold_pattern)
+    sys.exit(0)
+
     # Corelation of gold_pattern
     if 1:
         inspect_correlation(iq_samples[:int(4.5e4)], gold_pattern, Fs)
@@ -453,7 +476,7 @@ if __name__ == "__main__":
         with FReader(args) as fr:
             dur_sec = fr.samples_total / args.samp_rate
             print(f"Input file: {YELLOW}{args.file}{RESET}. Fs={args.samp_rate/1e6} MHz. Dur={dur_sec:.2f} s")
-            do_file_stage_II(fr, Fs=args.samp_rate, Fc=args.Fc,)
+            do_file_stage_II(fr, Fs=args.samp_rate, Fc=args.Fc)
 
     except KeyboardInterrupt:
         pass

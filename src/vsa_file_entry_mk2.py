@@ -78,7 +78,7 @@ freq_wnd: Tuple[float, float] = None # (449.5e6, 449.9e6)
 alpha = 0.01
 sigma = 4.0
 start_pos = 498_000 # 800_000
-
+start_pos = 0
 fft_n = 1024*2
 batch_n = 4
 p_val = 12
