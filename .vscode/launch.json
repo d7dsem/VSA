@@ -7,11 +7,11 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/analize_stage_II.py",
             "args": [
-                // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-57-04_02-02-2026_2ant/bw_0.00MHz_Fs_3.0MHz.wav" 
+                "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-57-04_02-02-2026_2ant/bw_0.00MHz_Fs_3.0MHz.wav" 
 
                 // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1331012500Hz_16-46-58_02-02-2026_1ant/bw_0.00MHz_Fs_5.0MHz.wav"
                 // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1331012500Hz_16-46-58_02-02-2026/bw_0.00MHz_Fs_5.0MHz.wav"
-                "-i", "e:/home/d7/Public/signals/OFDM/.stageI_5MHz-11-14-25/bw_0.00MHz_Fs_10.0MHz.wav", 
+                // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_5MHz-11-14-25/bw_0.00MHz_Fs_10.0MHz.wav", 
 
 
                 // "-i", "D:/C/Repo/signals_data/OFDM/.stageI_5MHz-11-14-25/bw_0.00MHz_Fs_10.0MHz.wav"
@@ -31,7 +31,7 @@
             "args": [
                 // "-i", "e:/home/d7/Public/signals/OFDM/5MHz-11-14-25.wav",
                 // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",   // Fs=10MHz
-                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026_1ant.wav"    // Fs=5MHz
+                "-i", "e:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026_1ant.wav"    // Fs=5MHz
                 // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026_1ant.wav"       // Fs=5MHz
                 // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav"       // Fs=1e+07
                 // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1330000000Hz_15-57-04_02-02-2026_2ant.wav"       // Fs=3e+06
@@ -44,7 +44,7 @@
 
                 // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1330000000Hz_15-47-10_02-02-2026_2ant/bw_0.wav",
                 // "-i", "D:/C/Repo/signals_data/OFDM/baseband_1330000000Hz_15-47-10_02-02-2026_2ant.wav",
-                "-i", "D:/C/Repo/signals_data/OFDM/5MHz-11-14-25.bin", "--Fs","10e6",
+                // "-i", "D:/C/Repo/signals_data/OFDM/5MHz-11-14-25.bin", "--Fs","10e6",
                  
                 
 
