@@ -355,8 +355,13 @@ def do_file_stage_II(
     
 
     show_cnt = int((BURST_DUR * 10) * Fs) + 2*prefix_visual
+    show_cnt = iq_samples.size // 100 
     _ = deploy_vsa_pro(iq_samples[:show_cnt], fr.Fs,
                     file_id=f_id,
+                    # extra_channels=['Pwr', 'Corr'],
+                    # extra_channels=['dPh', 'Corr'],
+                    extra_channels=['Corr'],
+                    default_rois_dur_sec=BURST_DUR,
                     phase_preamb_patern=gold_pattern)
     sys.exit(0)
 

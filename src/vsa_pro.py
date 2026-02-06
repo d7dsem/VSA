@@ -54,9 +54,9 @@ class SpectrumAnalytic:
         self.last_data = {"roi": (None, None), "fixed": (None, None)}
         
         # Прив'язка до події зміни масштабу ViewBox (зум/пан)
-        self.plot.getViewBox().sigRangeChanged.connect(self._auto_resyle_on_zoom)
+        self.plot.getViewBox().sigRangeChanged.connect(self._auto_restyle_on_zoom)
 
-    def _auto_resyle_on_zoom(self):
+    def _auto_restyle_on_zoom(self):
         """Автоматично перемикає Line/Stem залежно від поточного масштабу"""
         self._refresh_view(self.curve, *self.last_data["roi"], self.color_roi)
         self._refresh_view(self.curve_fixed, *self.last_data["fixed"], self.color_fixed)
@@ -112,7 +112,7 @@ class SpectrumAnalytic:
         
         # ФОРМУЄМО ЗАГОЛОВОК (той самий rbw, що загубився)
         rbw_khz = (fs / N) / 1e3
-        title = f"ROI rbw={rbw_khz:.3f} KHz (N={N})"
+        title = f"ROI. N={N:_} | Fs={fs/1e6:.3f} MHz | rbw={rbw_khz:.3f} KHz"
 
         # 2. Розрахунок Fixed Instrument
         if isinstance(fft_n, int) and fft_n > 0:
@@ -149,19 +149,22 @@ class SpectrumAnalytic:
         self.plot.setTitle(title)
         
         # Візуалізація (Line/Stem)
-        self._auto_resyle_on_zoom()
+        self._auto_restyle_on_zoom()
 
 
 class VSAProWindow(QWidget):
     CONFIG = {
-        'colors': {'I': '#5af', 'Q': '#f5a', 'Pwr': '#0f0', 'dPh': '#ff0', 'FFT': '#0f0'},
+        'colors': {
+                'I': '#5af', 'Q': '#f5a', 'Pwr': '#0f0', 'dPh': '#ff0', 
+                'FFT': '#0f0', 'Corr': '#f80'  
+        },
         'roi_brush': (255, 255, 0, 40),
         'roi_hover_brush': (255, 255, 0, 70),
         'line_width': 1.0,
         'y_axis_width': 65,
         'bg_color': '#1a1a1a',
         'panel_bg': '#222',
-        "defaulyt_rois_dur_sec": 327.7e-6,
+        "default_rois_dur_sec": 327.68e-6,
         'min_roi_samples': 2,
         'marker_threshold': 800, 
         'marker_size': 7,
@@ -170,14 +173,29 @@ class VSAProWindow(QWidget):
         'default_fft_size': 'Dynamic',
         'layout_columns_ratio': (2, 3),      # (channels, analytics)
         'layout_ana_rows_ratio': (2, 1, 1),  # (ana_0, ana_1, ana_2)
+        'corr_mode_default': 'Magnitude',  # ← НОВИЙ ПАРАМЕТР
+        'corr_phase_degrees': True,        # ← НОВИЙ ПАРАМЕТР  
+        'corr_normalize': True,            # ← НОВИЙ ПАРАМЕТР
     }
 
     def __init__(self, iq, Fs, file_id, **kwargs):
+        """
+        kwargs supported 'extra_channels', ['Pwr', 'dPh']
+        """
         super().__init__()
         self.iq = iq
         self.Fs = Fs
-        self.rows_names = ['I', 'Q', 'Pwr', 'dPh']
+        extra = kwargs.get('extra_channels', [])
+        self.rows_names = ['I', 'Q'] + extra
         self.data_len = len(iq)
+        self.CONFIG["default_rois_dur_sec"] = kwargs.get("default_rois_dur_sec", 327.68e-6)
+        # Correaltion block
+        self.corr_enabled = 'Corr' in self.rows_names
+        self.corr_phase_degrees = kwargs.get('corr_phase_degrees', self.CONFIG['corr_phase_degrees'])
+        self.corr_normalize = kwargs.get('corr_normalize', self.CONFIG['corr_normalize'])
+        self.corr_complex_cache = None  # Для кешування
+    
+    
         self.channels = {}
         self.plots = {}    
         self.curves = {}   
@@ -220,6 +238,16 @@ class VSAProWindow(QWidget):
         self.combo_fft_size.currentTextChanged.connect(lambda: self._on_roi_changed(self.rois[0]))
         top_lay.addWidget(self.combo_fft_size)
         
+        if self.corr_enabled:
+            top_lay.addSpacing(20)
+            top_lay.addWidget(QLabel("Corr Mode:"))
+            self.combo_corr_mode = QComboBox()
+            self.combo_corr_mode.addItems(['Magnitude', 'Phase'])
+            self.combo_corr_mode.setCurrentText(self.CONFIG['corr_mode_default'])
+            self.combo_corr_mode.setFixedWidth(100)
+            self.combo_corr_mode.currentTextChanged.connect(self._on_corr_mode_changed)
+            top_lay.addWidget(self.combo_corr_mode)
+        
         top_lay.addStretch()
         self.btn_reset = QPushButton("Reset Zoom (A)")
         self.btn_reset.clicked.connect(self._reset_zoom)
@@ -235,6 +263,7 @@ class VSAProWindow(QWidget):
             p.getAxis('left').setWidth(self.CONFIG['y_axis_width'])
             p.setMouseEnabled(x=True, y=False)
             p.vb.setLimits(minXRange=2)
+            p.setLabel('left', name, color=self.CONFIG['colors'].get(name, '#fff'))
             self.plots[name] = p
             if i > 0: p.setXLink(self.plots['I'])
 
@@ -299,13 +328,16 @@ class VSAProWindow(QWidget):
     def _calculate_projections(self):
         self.channels['I'] = self.iq.real
         self.channels['Q'] = self.iq.imag
-        self.channels['Pwr'] = 10 * np.log10(np.abs(self.iq)**2 + 1e-12)
-        diff = self.iq[1:] * np.conj(self.iq[:-1])
-        self.channels['dPh'] = np.append(np.angle(diff), 0)
-
+        if 'Pwr' in self.rows_names:
+            self.channels['Pwr'] = 10 * np.log10(np.abs(self.iq)**2 + 1e-12)
+        if 'dPh' in self.rows_names:
+            diff = self.iq[1:] * np.conj(self.iq[:-1])
+            self.channels['dPh'] = np.append(np.angle(diff), 0)
+        if self.corr_enabled:
+            self.channels['Corr'] = np.zeros(self.data_len)
 
     def _setup_standard_rois(self):
-        n_points = int(self.CONFIG['defaulyt_rois_dur_sec'] * self.Fs)
+        n_points = int(self.CONFIG['default_rois_dur_sec'] * self.Fs)
         w = max(self.CONFIG['min_roi_samples'], n_points)
         initial_region = [0, w]
         for name in self.rows_names:
@@ -350,7 +382,11 @@ class VSAProWindow(QWidget):
         
         s0, s1 = int(round(r0)), int(round(r1))
         idx0, idx1 = max(0, s0), min(self.data_len, s1)
-        
+        if self.corr_enabled:
+            roi_slice = self.iq[idx0:idx1]
+            corr_complex = np.correlate(self.iq, roi_slice, mode='same')
+            self.corr_complex_cache = corr_complex  # Кешуємо для runtime switch
+        self._update_corr_display()
         if hasattr(self, 'fft_module'):
             fft_size_str = self.combo_fft_size.currentText()
             fft_param = int(fft_size_str) if fft_size_str.isdigit() else None
@@ -358,8 +394,8 @@ class VSAProWindow(QWidget):
 
         n = idx1 - idx0
         t_sec = n / self.Fs
-        if t_sec < 1e-3: t_str = f"{t_sec * 1e6:.1f} us"
-        elif t_sec < 1.0: t_str = f"{t_sec * 1e3:.2f} ms"
+        if t_sec < 1e-3: t_str = f"{t_sec * 1e6:.3f} us"
+        elif t_sec < 1.0: t_str = f"{t_sec * 1e3:.3f} ms"
         else: t_str = f"{t_sec:.3f} s"
         self.lbl_roi_info.setText(f"Start: {idx0:,} | N: {n:,} | Duration: {t_str}")
 
@@ -403,6 +439,34 @@ class VSAProWindow(QWidget):
                 pen=pg.mkPen(color, width=self.CONFIG['line_width'])
             )
 
+
+    # ============================================================================
+    #  correlation
+    def _update_corr_display(self):
+        """Оновити відображення Corr каналу згідно вибраного режиму"""
+        if not self.corr_enabled or self.corr_complex_cache is None:
+            return
+        
+        mode = self.combo_corr_mode.currentText()
+        
+        if mode == 'Magnitude':
+            data = np.abs(self.corr_complex_cache)
+            if self.corr_normalize:
+                data = data / np.max(data)
+        else:  # Phase
+            data = np.angle(self.corr_complex_cache)
+            if self.corr_phase_degrees:
+                data = np.degrees(data)
+        
+        self.channels['Corr'] = data
+        if 'Corr' in self.curves:
+            self.curves['Corr'].setData(data)
+
+    def _on_corr_mode_changed(self):
+        """Callback при зміні Corr Mode combo"""
+        self._update_corr_display()
+    # ============================================================================
+    
     def _reset_zoom(self):
         self.plots['I'].setXRange(0, self.data_len)
         self.plots['I'].autoRange(padding=0)
