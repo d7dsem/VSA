@@ -28,7 +28,7 @@ class SpectrumAnalytic:
     DEFAULT_CONFIG = {
         "color_roi": '#ffffff',          #  для ROI
         "color_fixed": "#0044ff",       #  для Fixed
-        "max_stems_on_screen": 150,     # Поріг включення стему (кількість бінів на екрані)
+        "max_stems_on_screen": 900,     # Поріг включення стему (кількість бінів на екрані)
         "baseline_db": -100,            # "Підлога" для вертикальних ліній
         "line_width_roi": 1.0,
         "line_width_fixed": 1.5,
@@ -161,13 +161,15 @@ class VSAProWindow(QWidget):
         'y_axis_width': 65,
         'bg_color': '#1a1a1a',
         'panel_bg': '#222',
-        "defaulyt_rois_dur_sec": 0.1e-3,
+        "defaulyt_rois_dur_sec": 327.7e-6,
         'min_roi_samples': 2,
-        'marker_threshold': 400, 
+        'marker_threshold': 800, 
         'marker_size': 7,
         'marker_symbol': 'o',
-        'fft_sizes': ['Dynamic', '256', '512', '1024', '2048', '4096', '8192'],
-        'default_fft_size': '1024',
+        'fft_sizes': ['Dynamic', '32', '64', '128', '256', '512', '1024', '2048', '4096', '8192'],
+        'default_fft_size': 'Dynamic',
+        'layout_columns_ratio': (2, 3),      # (channels, analytics)
+        'layout_ana_rows_ratio': (2, 1, 1),  # (ana_0, ana_1, ana_2)
     }
 
     def __init__(self, iq, Fs, file_id, **kwargs):
@@ -196,31 +198,6 @@ class VSAProWindow(QWidget):
         self.setWindowTitle(f"VSA Pro - {file_id}")
         self.resize(1400, 900)
         self.setStyleSheet(f"background-color: {self.CONFIG['bg_color']}; color: #eee;")
-
-    def _setup_shortcuts(self):
-        """Гарантована робота хоткеїв незалежно від фокуса"""
-        QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._go_home)
-        QShortcut(QKeySequence(Qt.Key.Key_End), self, self._go_end)
-        QShortcut(QKeySequence(Qt.Key.Key_A), self, self._reset_zoom)
-
-    def _go_home(self):
-        vb = self.plots['I'].vb
-        vr = vb.viewRange()[0]
-        w = vr[1] - vr[0]
-        self.plots['I'].setXRange(0, w, padding=0)
-
-    def _go_end(self):
-        vb = self.plots['I'].vb
-        vr = vb.viewRange()[0]
-        w = vr[1] - vr[0]
-        self.plots['I'].setXRange(self.data_len - w, self.data_len, padding=0)
-
-    def _calculate_projections(self):
-        self.channels['I'] = self.iq.real
-        self.channels['Q'] = self.iq.imag
-        self.channels['Pwr'] = 10 * np.log10(np.abs(self.iq)**2 + 1e-12)
-        diff = self.iq[1:] * np.conj(self.iq[:-1])
-        self.channels['dPh'] = np.append(np.angle(diff), 0)
 
     def init_layout(self):
         main_layout = QVBoxLayout(self)
@@ -269,24 +246,26 @@ class VSAProWindow(QWidget):
         slider_layout.addItem(self.slider_proxy)
         slider_layout.setContentsMargins(self.CONFIG['y_axis_width'], 5, 0, 10)
 
+        # --- АНАЛІТИЧНА КОЛОНКА (тільки 3 панелі в одній колонці) ---
         self.analytics_panel = self.view.addLayout(row=0, col=1, rowspan=5)
         self.ana_widgets = {}
-        self.zoom_curves = {}
 
-        for i in range(4):
-            z = self.analytics_panel.addPlot(row=i, col=0)
-            z.showGrid(x=True, y=True, alpha=0.3)
-            self.ana_widgets[f'zoom_{i}'] = z
-            color = self.CONFIG['colors'].get(self.rows_names[i], '#fff')
-            self.zoom_curves[i] = z.plot(pen=pg.mkPen(color, width=1.2))
-            
-            if i < 3:
-                a = self.analytics_panel.addPlot(row=i, col=1)
-                a.showGrid(x=True, y=True, alpha=0.3)
-                self.ana_widgets[f'ana_{i}'] = a
+        for i in range(3):
+            a = self.analytics_panel.addPlot(row=i, col=0)
+            a.showGrid(x=True, y=True, alpha=0.3)
+            self.ana_widgets[f'ana_{i}'] = a
 
-        self.analytics_panel.layout.setColumnStretchFactor(0, 1) # Зробити зум вужчим
-        self.analytics_panel.layout.setColumnStretchFactor(1, 2) # Зробити FFT ширшим
+        # Пропорції колонок (channels : analytics)
+        self.view.ci.layout.setColumnStretchFactor(0, self.CONFIG['layout_columns_ratio'][0])
+        self.view.ci.layout.setColumnStretchFactor(1, self.CONFIG['layout_columns_ratio'][1])
+
+        # Пропорції 2:1:1
+        for i, ratio in enumerate(self.CONFIG['layout_ana_rows_ratio']):
+            self.analytics_panel.layout.setRowStretchFactor(i, ratio)
+        # # Пропорції 2:1:1
+        # self.analytics_panel.layout.setRowStretchFactor(0, 2)
+        # self.analytics_panel.layout.setRowStretchFactor(1, 1)
+        # self.analytics_panel.layout.setRowStretchFactor(2, 1)
 
         # --- FOOTER ---
         self.footer = QFrame()
@@ -298,6 +277,32 @@ class VSAProWindow(QWidget):
         footer_lay.addStretch()
         footer_lay.addWidget(self.lbl_roi_info)
         main_layout.addWidget(self.footer)
+
+    def _setup_shortcuts(self):
+        """Гарантована робота хоткеїв незалежно від фокуса"""
+        QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._go_home)
+        QShortcut(QKeySequence(Qt.Key.Key_End), self, self._go_end)
+        QShortcut(QKeySequence(Qt.Key.Key_A), self, self._reset_zoom)
+
+    def _go_home(self):
+        vb = self.plots['I'].vb
+        vr = vb.viewRange()[0]
+        w = vr[1] - vr[0]
+        self.plots['I'].setXRange(0, w, padding=0)
+
+    def _go_end(self):
+        vb = self.plots['I'].vb
+        vr = vb.viewRange()[0]
+        w = vr[1] - vr[0]
+        self.plots['I'].setXRange(self.data_len - w, self.data_len, padding=0)
+
+    def _calculate_projections(self):
+        self.channels['I'] = self.iq.real
+        self.channels['Q'] = self.iq.imag
+        self.channels['Pwr'] = 10 * np.log10(np.abs(self.iq)**2 + 1e-12)
+        diff = self.iq[1:] * np.conj(self.iq[:-1])
+        self.channels['dPh'] = np.append(np.angle(diff), 0)
+
 
     def _setup_standard_rois(self):
         n_points = int(self.CONFIG['defaulyt_rois_dur_sec'] * self.Fs)
@@ -350,9 +355,6 @@ class VSAProWindow(QWidget):
             fft_size_str = self.combo_fft_size.currentText()
             fft_param = int(fft_size_str) if fft_size_str.isdigit() else None
             self.fft_module.update(self.iq[idx0:idx1], self.Fs, fft_n=fft_param)
-            
-        for i in range(len(self.rows_names)):
-            self.zoom_curves[i].setData(self.channels[self.rows_names[i]][idx0:idx1])
 
         n = idx1 - idx0
         t_sec = n / self.Fs

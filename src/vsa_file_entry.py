@@ -39,6 +39,7 @@ from colorizer import colorize, inject_colors_into
 from fft_core import P_FS_RAW, IQInterleavedF32, IQInterleavedI16, i16_to_f32
 from io_stuff import FReader
 from vsa_gsv import VSA
+from wav import read_wav_header  # uses your existing module
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -287,7 +288,7 @@ def _apply_vsa_file_contract(args: argparse.Namespace) -> argparse.Namespace:
             raise RuntimeError("--samp-rate is required for .bin input")
     else:
         # wav: Fs from header; validate if user also provided samp_rate
-        from wav import read_wav_header  # uses your existing module
+
         props = read_wav_header(f)
         wav_fs = float(props["sample_rate"])
         if args.samp_rate is not None and float(args.samp_rate) != wav_fs:

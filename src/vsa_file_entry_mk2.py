@@ -272,7 +272,7 @@ def do_vsa_file(
     print(f"Signals detected in {len(bands_lst)} frames.")
 
     if bands_lst:
-       analyze_and_export_bands(bands_lst, Fs, base_filename=fr.f_path.stem)
+       analyze_and_export_bands(bands_lst, Fs, base_filename=fr.f_path.stem, folder=fr.parent)
     else:
         print("No signals matched your criteria (min_bw / threshold_iqr).")
     
