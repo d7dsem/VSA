@@ -17,6 +17,14 @@ WHITE: str; BRIGHT_WHITE: str; RESET: str; WARN: str; ERR: str; INFO: str; DBG: 
 inject_colors_into(globals())
 
 
+
+def sec2str(t_sec:float)->str:
+    if t_sec < 1e-3: t_str = f"{t_sec * 1e6:.3f} us"
+    elif t_sec < 1.0: t_str = f"{t_sec * 1e3:.3f} ms"
+    else: t_str = f"{t_sec:.3f} s"
+    return t_str
+
+
 def print_ascii_hist(data: np.ndarray, Fs: float | None = None, bins: int = 20, width: int = 50):
     if data.size == 0: 
         return

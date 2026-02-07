@@ -13,6 +13,7 @@ from PyQt6.QtGui import QShortcut, QKeySequence, QColor
 
 # Local imports
 from colorizer import colorize, inject_colors_into
+from helpers import sec2str
 # --- color names for IDE/static analysis suppress warnings --------------------
 GREEN: str; BRIGHT_GREEN: str; RED: str; BRIGHT_RED: str
 YELLOW: str; BRIGHT_YELLOW: str; BLACK: str; BRIGHT_BLACK: str
@@ -112,7 +113,7 @@ class SpectrumAnalytic:
         
         # ФОРМУЄМО ЗАГОЛОВОК (той самий rbw, що загубився)
         rbw_khz = (fs / N) / 1e3
-        title = f"ROI. N={N:_} | Fs={fs/1e6:.3f} MHz | rbw={rbw_khz:.3f} KHz"
+        title = f"ROI. {sec2str(N/fs)} ({N:_}) | Fs={fs/1e6:.3f} MHz | rbw={rbw_khz:.3f} KHz"
 
         # 2. Розрахунок Fixed Instrument
         if isinstance(fft_n, int) and fft_n > 0:
@@ -171,7 +172,7 @@ class VSAProWindow(QWidget):
         'marker_symbol': 'o',
         'fft_sizes': ['Dynamic', '32', '64', '128', '256', '512', '1024', '2048', '4096', '8192'],
         'default_fft_size': 'Dynamic',
-        'layout_columns_ratio': (2, 3),      # (channels, analytics)
+        'layout_columns_ratio': (3, 2),      # (channels, analytics)
         'layout_ana_rows_ratio': (2, 1, 1),  # (ana_0, ana_1, ana_2)
         'corr_mode_default': 'Magnitude',  # ← НОВИЙ ПАРАМЕТР
         'corr_phase_degrees': True,        # ← НОВИЙ ПАРАМЕТР  
@@ -380,24 +381,26 @@ class VSAProWindow(QWidget):
                 roi.setRegion(region)
                 roi.blockSignals(False)
         
-        s0, s1 = int(round(r0)), int(round(r1))
-        idx0, idx1 = max(0, s0), min(self.data_len, s1)
+        s0 = int(np.ceil(r0))   
+        s1 = int(np.floor(r1)) 
+        idx0, idx1 = max(0, s0), min(self.data_len - 1, s1)
+        roi_slice = self.iq[idx0:idx1+1]
         if self.corr_enabled:
-            roi_slice = self.iq[idx0:idx1]
+            
             corr_complex = np.correlate(self.iq, roi_slice, mode='same')
             self.corr_complex_cache = corr_complex  # Кешуємо для runtime switch
         self._update_corr_display()
         if hasattr(self, 'fft_module'):
             fft_size_str = self.combo_fft_size.currentText()
             fft_param = int(fft_size_str) if fft_size_str.isdigit() else None
-            self.fft_module.update(self.iq[idx0:idx1], self.Fs, fft_n=fft_param)
+            self.fft_module.update(roi_slice, self.Fs, fft_n=fft_param)
 
-        n = idx1 - idx0
-        t_sec = n / self.Fs
-        if t_sec < 1e-3: t_str = f"{t_sec * 1e6:.3f} us"
-        elif t_sec < 1.0: t_str = f"{t_sec * 1e3:.3f} ms"
-        else: t_str = f"{t_sec:.3f} s"
-        self.lbl_roi_info.setText(f"Start: {idx0:,} | N: {n:,} | Duration: {t_str}")
+
+        t_str_1 =  sec2str(idx0 / self.Fs)
+        ln = len(roi_slice)
+        t_str2 = sec2str(ln / self.Fs)
+
+        self.lbl_roi_info.setText(f"RoI:  start {t_str_1} ({idx0:_})  |  dur {t_str2} ({ln:_})")
 
     def _setup_marker_logic(self):
         self.plots['I'].sigXRangeChanged.connect(self._update_markers)

@@ -131,18 +131,8 @@ def do_file_stage_II(
 ):
     total_samp = fr.samples_total
     f32_buf: IQInterleavedF32 = np.empty(total_samp * 2, dtype=np.float32)
+    f_id = f"{fr.f_path.parent.name}/{fr.f_path.name}"
 
-    # 1. Переклад тривалості в кількість семплів (цілі числа)
-    # n = duration * Fs
-    ln_burst = int(wnd_analize_dur * Fs)
-    W = max(16, ln_burst // 4)  # Вікно W
-    step = max(4, W // 4)      # Крок
-    n_min = int(seq_dur_min * Fs)
-    n_max = int(seq_dur_max * Fs)
-
-    print(f"{INFO} Energy-based Burst Detection with Sliding Window Averaging and Morphological Cleaning"
-         f"\n      Window {GREEN}{W}{RESET} samples <=> {CYAN}{wnd_analize_dur*1e3}{RESET} ms."
-         f"\n      Start search...")
     # print(f"  Search SEQ range: {CYAN}{seq_dur_min*1e6:.1f} - {seq_dur_max*1e6:.1f}{RESET} us")
     # print(f"  Samples range: {YELLOW}{n_min} - {n_max}{RESET} samples")
     t0 = monotonic()
@@ -155,8 +145,48 @@ def do_file_stage_II(
         print(f"{ERR} Error raed file {YELLOW}{fr.f_path}{RESET}")
         return
     
-    # 1. Готуємо сигнал
+    # 1. F32 C-Cont arr to np.complex
     iq_samples = f32_buf.view(np.complex64)
+    
+    # OFDM Geometry (est)
+    BURST_DUR = 720.0e-6
+
+
+    SYM_PAYLOD_DUR = 327.6e-6
+    CP_DUR = 20.0e-6
+    SYM_DUR = SYM_PAYLOD_DUR + CP_DUR
+    PRE_DUR = BURST_DUR  - 2 * SYM_DUR # depends on sign BW: on 5 MHz - x2 of 2.5 MHz
+
+
+    if 1: # VSA pro call and exit
+        # select part of record
+        # s = 36_080
+        # e = s + iq_samples.size // 100 
+        
+        s = 0
+        # e = s + int(12 *BURST_DUR * Fs)
+        e = s + int(40 *BURST_DUR * Fs)
+        _ = deploy_vsa_pro(iq_samples[s:e], fr.Fs,
+                        file_id=f_id,
+                        # extra_channels=['Pwr', 'dPh'],
+                        # extra_channels=['Pwr', 'Corr'],
+                        extra_channels=['dPh', 'Corr'],
+                        # extra_channels=['Corr'],
+                        default_rois_dur_sec=SYM_PAYLOD_DUR,
+                )
+        sys.exit(0)
+        
+    # 1. Переклад тривалості в кількість семплів (цілі числа)
+    # n = duration * Fs
+    ln_burst = int(wnd_analize_dur * Fs)
+    W = max(16, ln_burst // 4)  # Вікно W
+    step = max(4, W // 4)      # Крок
+    n_min = int(seq_dur_min * Fs)
+    n_max = int(seq_dur_max * Fs)
+
+    print(f"{INFO} Energy-based Burst Detection with Sliding Window Averaging and Morphological Cleaning"
+         f"\n      Window {GREEN}{W}{RESET} samples <=> {CYAN}{wnd_analize_dur*1e3}{RESET} ms."
+         f"\n      Start search...")
     power = (iq_samples.real**2 + iq_samples.imag**2)
     # 1. Переводимо в dB з захистом від нулів
     p_db = 10 * np.log10(power + 1e-12)
@@ -203,8 +233,8 @@ def do_file_stage_II(
     prefix_visual = int(0.025e-3*Fs)
     K = n_bursts - 1
     # K //= 50
-    BURST_DUR = 0.72e-3 
 
+    
     _overlay_wnd = ln_mean + ln_mean//10
     _overlay_wnd = int(BURST_DUR * Fs) # look for whole 0.72 ms
     # _overlay_wnd = 600 # slook to start
@@ -304,7 +334,7 @@ def do_file_stage_II(
         s, e = sel_rv
         print(f"Selected span: s, e = {s}, {e}")
     # Burst Overlay Analysis: Fine tune patrern len scaffold
-    f_id = f"{fr.f_path.parent.name}/{fr.f_path.name}"
+
     if 0:
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1330000000Hz_15-57-04_02-02-2026_2ant
         # burst_end_idx = int(0.72e-3 * Fs) + prefix_visual # _baseband_1331012500Hz_16-46-58_02-02-2026
@@ -352,18 +382,7 @@ def do_file_stage_II(
             json.dump(pat_info, f, indent=4)
     else:
         gold_pattern: np.ndarray = median_ph_vec[86 : 141]
-    
 
-    show_cnt = int((BURST_DUR * 10) * Fs) + 2*prefix_visual
-    show_cnt = iq_samples.size // 100 
-    _ = deploy_vsa_pro(iq_samples[:show_cnt], fr.Fs,
-                    file_id=f_id,
-                    # extra_channels=['Pwr', 'Corr'],
-                    # extra_channels=['dPh', 'Corr'],
-                    extra_channels=['Corr'],
-                    default_rois_dur_sec=BURST_DUR,
-                    phase_preamb_patern=gold_pattern)
-    sys.exit(0)
 
     # Corelation of gold_pattern
     if 1:
