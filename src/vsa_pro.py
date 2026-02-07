@@ -1,3 +1,4 @@
+from pathlib import Path
 import sys
 import traceback
 from typing import Any, Dict, Literal, Optional, Union
@@ -5,9 +6,9 @@ import numpy as np
 from scipy.signal import get_window
 
 import pyqtgraph as pg
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QFrame, QLabel, QComboBox, QSlider, QPushButton, QGraphicsProxyWidget) 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import  QTimer, Qt
 from PyQt6.QtGui import QShortcut, QKeySequence, QColor
 
 
@@ -172,18 +173,21 @@ class VSAProWindow(QWidget):
         'marker_symbol': 'o',
         'fft_sizes': ['Dynamic', '32', '64', '128', '256', '512', '1024', '2048', '4096', '8192'],
         'default_fft_size': 'Dynamic',
-        'layout_columns_ratio': (3, 2),      # (channels, analytics)
+        'layout_columns_ratio': (2, 3),      # (channels, analytics)
         'layout_ana_rows_ratio': (2, 1, 1),  # (ana_0, ana_1, ana_2)
         'corr_mode_default': 'Magnitude',  # ← НОВИЙ ПАРАМЕТР
         'corr_phase_degrees': True,        # ← НОВИЙ ПАРАМЕТР  
         'corr_normalize': True,            # ← НОВИЙ ПАРАМЕТР
     }
 
-    def __init__(self, iq, Fs, file_id, **kwargs):
+    def __init__(self, iq:np.ndarray, Fs:float, f_path: Path, **kwargs):
         """
         kwargs supported 'extra_channels', ['Pwr', 'dPh']
         """
         super().__init__()
+        self.f_path = f_path
+        file_id = f".../{self.f_path.parent.name}/{self.f_path.name}"
+            
         self.iq = iq
         self.Fs = Fs
         extra = kwargs.get('extra_channels', [])
@@ -195,7 +199,17 @@ class VSAProWindow(QWidget):
         self.corr_phase_degrees = kwargs.get('corr_phase_degrees', self.CONFIG['corr_phase_degrees'])
         self.corr_normalize = kwargs.get('corr_normalize', self.CONFIG['corr_normalize'])
         self.corr_complex_cache = None  # Для кешування
-    
+        # ROI Width Control
+        roi_presets_input = kwargs.get('roi_dur_presets', [])
+        default_dur = self.CONFIG["default_rois_dur_sec"]
+        
+        # Merge presets з default (якщо default не в списку - додати)
+        self.roi_presets_sec = list(roi_presets_input)
+        if default_dur not in self.roi_presets_sec:
+            self.roi_presets_sec.insert(0, default_dur)
+        
+        # Поточне значення ROI width
+        self.current_roi_dur_sec = default_dur
     
         self.channels = {}
         self.plots = {}    
@@ -213,7 +227,14 @@ class VSAProWindow(QWidget):
         self._setup_slider_logic()
         self._setup_marker_logic()
         self._setup_shortcuts() # ОСЬ ТУТ ТЕПЕР ЖИВУТЬ КНОПКИ
-
+        self.view.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        
+        # ROI Width Control signals
+        self.combo_roi_preset.currentIndexChanged.connect(self._on_preset_selected)
+        self.lineedit_roi.returnPressed.connect(self._on_manual_input)
+        self.lineedit_roi.editingFinished.connect(self._on_manual_input)
+        self.combo_roi_unit.currentTextChanged.connect(self._on_unit_changed)
+        
         self.setWindowTitle(f"VSA Pro - {file_id}")
         self.resize(1400, 900)
         self.setStyleSheet(f"background-color: {self.CONFIG['bg_color']}; color: #eee;")
@@ -238,6 +259,38 @@ class VSAProWindow(QWidget):
         self.combo_fft_size.setFixedWidth(80)
         self.combo_fft_size.currentTextChanged.connect(lambda: self._on_roi_changed(self.rois[0]))
         top_lay.addWidget(self.combo_fft_size)
+        
+                # --- ROI WIDTH CONTROL ---
+        top_lay.addSpacing(20)
+        top_lay.addWidget(QLabel("ROI Width:"))
+        
+        # Preset ComboBox
+        self.combo_roi_preset = QComboBox()
+        self.combo_roi_preset.setFixedWidth(120)
+        
+        # Unit ComboBox
+        self.combo_roi_unit = QComboBox()
+        self.combo_roi_unit.addItems(['s', 'ms', 'us'])
+        self.combo_roi_unit.setFixedWidth(60)
+        
+        # Вибрати оптимальну початкову одиницю
+        initial_unit = self._auto_select_unit(self.current_roi_dur_sec)
+        self.combo_roi_unit.setCurrentText(initial_unit)
+        
+        # Наповнити preset combobox
+        for preset_sec in self.roi_presets_sec:
+            value_in_unit = self._sec_to_unit(preset_sec, initial_unit)
+            self.combo_roi_preset.addItem(f"{value_in_unit:.3f} {initial_unit}", preset_sec)
+        
+        # Manual Input LineEdit
+        self.lineedit_roi = QLineEdit()
+        self.lineedit_roi.setFixedWidth(100)
+        initial_value = self._sec_to_unit(self.current_roi_dur_sec, initial_unit)
+        self.lineedit_roi.setText(f"{initial_value:.6g}")
+        
+        top_lay.addWidget(self.combo_roi_preset)
+        top_lay.addWidget(self.lineedit_roi)
+        top_lay.addWidget(self.combo_roi_unit)
         
         if self.corr_enabled:
             top_lay.addSpacing(20)
@@ -301,10 +354,14 @@ class VSAProWindow(QWidget):
         self.footer = QFrame()
         self.footer.setFixedHeight(30)
         self.footer.setStyleSheet(f"background: {self.CONFIG['panel_bg']}; border-top: 1px solid #444;")
+        self.lbl_cursor = QLabel("Cursor: -")
+        self.lbl_cursor.setStyleSheet("font-family: 'Courier New', monospace;")
         footer_lay = QHBoxLayout(self.footer)
         self.lbl_roi_info = QLabel("ROI: -")
+        self.lbl_roi_info.setStyleSheet("font-family: 'Courier New', monospace;")
         footer_lay.addWidget(QLabel("Ready"))
         footer_lay.addStretch()
+        footer_lay.addWidget(self.lbl_cursor) 
         footer_lay.addWidget(self.lbl_roi_info)
         main_layout.addWidget(self.footer)
 
@@ -415,6 +472,26 @@ class VSAProWindow(QWidget):
                     self.curves[name].setSymbolSize(self.CONFIG['marker_size'])
                     self.curves[name].setSymbolBrush(self.CONFIG['colors'][name])
 
+    def _on_mouse_moved(self, pos):
+        """Оновлення позиції курсора у footer"""
+        num_chr = 28
+        for name in self.rows_names:
+            vb = self.plots[name].vb
+            if vb.sceneBoundingRect().contains(pos):
+                mouse_point = vb.mapSceneToView(pos)
+                x = mouse_point.x()
+                
+                if 0 <= x < self.data_len:
+                    samp_num = int(x)
+                    time_str = sec2str(x / self.Fs)
+                    view_str = f"{time_str} ({samp_num:_})"
+                    self.lbl_cursor.setText(f"Cursor: {view_str:>{num_chr}}")
+                else:
+                    self.lbl_cursor.setText(f"Cursor: {'out of range':^{num_chr}}")
+                return
+        
+        self.lbl_cursor.setText(f"Cursor: {'---':^{num_chr}}")
+                
     def _setup_slider_logic(self):
         self.slider.valueChanged.connect(self._on_slider_moved)
         self.plots['I'].sigXRangeChanged.connect(self._update_slider_from_plot)
@@ -475,12 +552,163 @@ class VSAProWindow(QWidget):
         self.plots['I'].autoRange(padding=0)
 
 
-def deploy_vsa_pro(iq: np.ndarray, Fs: float, **kwargs):
+    # ============================================================================
+    #  ROI Width Control - Helper methods
+    # ============================================================================
+    
+    def _sec_to_unit(self, sec: float, unit: str) -> float:
+        """Конвертація секунд у вибрану одиницю"""
+        if unit == 's':
+            return sec
+        elif unit == 'ms':
+            return sec * 1e3
+        elif unit == 'us':
+            return sec * 1e6
+        else:
+            return sec
+    
+    def _unit_to_sec(self, value: float, unit: str) -> float:
+        """Конвертація з одиниці в секунди"""
+        if unit == 's':
+            return value
+        elif unit == 'ms':
+            return value * 1e-3
+        elif unit == 'us':
+            return value * 1e-6
+        else:
+            return value
+    
+    def _auto_select_unit(self, sec: float) -> str:
+        """Вибрати оптимальну одиницю для відображення"""
+        if sec < 1e-3:
+            return 'us'
+        elif sec < 1.0:
+            return 'ms'
+        else:
+            return 's'
+    
+    def _update_preset_combobox_units(self):
+        """Оновити відображення preset при зміні unit"""
+        if not hasattr(self, 'combo_roi_preset'):
+            return
+        
+        current_idx = self.combo_roi_preset.currentIndex()
+        unit = self.combo_roi_unit.currentText()
+        
+        for i in range(self.combo_roi_preset.count()):
+            preset_sec = self.combo_roi_preset.itemData(i)
+            value_in_unit = self._sec_to_unit(preset_sec, unit)
+            self.combo_roi_preset.setItemText(i, f"{value_in_unit:.3f} {unit}")
+        
+        if current_idx >= 0:
+            self.combo_roi_preset.setCurrentIndex(current_idx)
+            
+    def _apply_roi_duration(self, dur_sec: float):
+        """Застосувати фіксовану ширину до ROI, зберігаючи center"""
+        n_samples = int(dur_sec * self.Fs)
+        
+        # Отримати поточний center ROI
+        r0, r1 = self.rois[0].getRegion()
+        center = (r0 + r1) / 2
+        
+        # Розрахувати нові bounds
+        half_width = n_samples / 2
+        new_r0 = center - half_width
+        new_r1 = center + half_width
+        
+        # Clamp до меж датасету
+        if new_r0 < 0:
+            new_r0 = 0
+            new_r1 = n_samples
+        if new_r1 > self.data_len:
+            new_r1 = self.data_len
+            new_r0 = self.data_len - n_samples
+        
+        # Застосувати
+        self.rois[0].setRegion([new_r0, new_r1])
+    
+    def _on_preset_selected(self):
+        """Callback при виборі preset з ComboBox"""
+        idx = self.combo_roi_preset.currentIndex()
+        if idx < 0:
+            return
+        
+        preset_sec = self.combo_roi_preset.itemData(idx)
+        self.current_roi_dur_sec = preset_sec
+        
+        # Оновити LineEdit
+        unit = self.combo_roi_unit.currentText()
+        value = self._sec_to_unit(preset_sec, unit)
+        self.lineedit_roi.setText(f"{value:.6g}")
+        
+        # Застосувати до ROI
+        self._apply_roi_duration(preset_sec)
+    
+    def _on_manual_input(self):
+        """Callback при ручному вводі (Enter або focusOut)"""
+        self._validate_and_apply_manual_input()
+    
+    def _on_unit_changed(self):
+        """Callback при зміні одиниці"""
+        # Конвертувати поточне значення в LineEdit
+        try:
+            old_unit_idx = self.combo_roi_unit.currentIndex()
+            # Отримати старе значення перед зміною
+            current_text = self.lineedit_roi.text()
+            if current_text:
+                old_value = float(current_text)
+                # Знайти яка була стара одиниця (fallback через current_roi_dur_sec)
+                unit = self.combo_roi_unit.currentText()
+                new_value = self._sec_to_unit(self.current_roi_dur_sec, unit)
+                self.lineedit_roi.setText(f"{new_value:.6g}")
+        except:
+            pass
+        
+        # Оновити preset combobox
+        self._update_preset_combobox_units()
+    
+    def _update_lineedit_from_current(self):
+        """Синхронізувати LineEdit з current_roi_dur_sec"""
+        unit = self.combo_roi_unit.currentText()
+        value = self._sec_to_unit(self.current_roi_dur_sec, unit)
+        self.lineedit_roi.setText(f"{value:.6g}")
+    
+    def _validate_and_apply_manual_input(self):
+        """Валідація та застосування ручного вводу"""
+        try:
+            value = float(self.lineedit_roi.text())
+            if value <= 0:
+                raise ValueError("Value must be positive")
+            
+            unit = self.combo_roi_unit.currentText()
+            dur_sec = self._unit_to_sec(value, unit)
+            
+            # Перевірка меж
+            n_samples = int(dur_sec * self.Fs)
+            if n_samples < self.CONFIG['min_roi_samples']:
+                raise ValueError("Too small")
+            if n_samples > self.data_len:
+                raise ValueError("Too large")
+            
+            # Ok - застосувати
+            self.current_roi_dur_sec = dur_sec
+            self._apply_roi_duration(dur_sec)
+            
+        except:
+            # Відкат до попереднього значення
+            self._update_lineedit_from_current()
+            self._flash_error_border()
+    
+    def _flash_error_border(self):
+        """Візуальний feedback помилки"""
+        self.lineedit_roi.setStyleSheet("border: 1px solid red;")
+        QTimer.singleShot(500, lambda: self.lineedit_roi.setStyleSheet(""))
+            
+def deploy_vsa_pro(iq: np.ndarray, Fs: float, file_path:Path, **kwargs):
     ln = iq.size
-    f_id = kwargs.pop('file_id', "---")
     app = QApplication.instance() or QApplication(sys.argv)
     try:
-        gui = VSAProWindow(iq, Fs, f_id, **kwargs)
+        gui = VSAProWindow(iq, Fs, file_path, **kwargs)
         gui.show()
         app.exec()
         return gui

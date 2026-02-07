@@ -1,3 +1,33 @@
+# Устанвоити залежності
+
+
+З інтернету
+```bash
+pip install -r requirements.txt
+```
+
+Оффлайн
+```bash
+cd path/to/VSA/
+
+python -m pip install --no-index --find-links=./wheels -r requirements.txt
+```
+
+# Перевірка вав
+
+Linux/WSL
+```bash
+for f in *.wav; do sox --i -r "$f" | awk -v f="$f" '{print f "\t  \t" $1}'; done
+
+for f in *.wav; do echo -e "$f\t$(sox --i -r "$f") Hz\t$(sox --i -c "$f") ch\t$(sox --i -e "$f") / $(sox --i -b "$f")-bit"; done
+
+for f in *.wav; do printf "%s\t%s Hz\t%s ch\t%s / %s-bit\n" "$f" "$(sox --i -r "$f")" "$(sox --i -c "$f")" "$(sox --i -e "$f")" "$(sox --i -b "$f")"; done
+
+```
+
+
+**(obsleted)**
+
 # VSA-file
 
 VSA-file is a specialized tool for spectral analysis and visualization of IQ recordings. It is a command-line tool that uses `matplotlib`/`qt` and `numpy` to perform and visualize the analysis.

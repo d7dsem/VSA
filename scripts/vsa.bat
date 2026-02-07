@@ -49,7 +49,8 @@ pushd "%SCRIPT_DIR%\..\src" || (
 REM Run with input and extra args
 
 
-"%PYTHON_EXE%" vsa_file_entry_mk2.py -i "%INPUT%" !EXTRA_ARGS!
+::"%PYTHON_EXE%" vsa_file_entry_mk2.py -i "%INPUT%" !EXTRA_ARGS!
+"%PYTHON_EXE%" analize_stage_II.py -i "%INPUT%" !EXTRA_ARGS!
 
 set "rc=%ERRORLEVEL%"
 popd

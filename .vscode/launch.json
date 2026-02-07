@@ -2,15 +2,39 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Sort Burst I (Python)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/sort_bursts.py",
+            "args": [
+                // "-i", "e:/home/d7/Public/signals/OFDM/"
+
+                // 2026-02-07  FS | BW
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/"
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-23-29_07-02-2026.wav"  //   8 MHz | 2.5 
+                "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-25-02_07-02-2026.wav"     //   5 MHz | 2.5
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-27-15_07-02-2026.wav"  //   3 MHz | 2.5
+
+                // Lihno (10/5)
+                // "-i", "e:/home/d7/Public/signals/OFDM/5MHz-11-14-25.wav"
+            ]
+        },
+        {
             "name": "Stage II (Python)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/analize_stage_II.py",
             "args": [
                 // "-i", "e:/home/d7/Public/signals/OFDM/"
+                // 2026-02-07  FS | BW
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/"
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-23-29_07-02-2026.wav"  //   8 MHz | 2.5 
+                "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-25-02_07-02-2026.wav"     //   5 MHz | 2.5
+                // "-i", "e:/home/d7/Public/signals/OFDM/2026-02-07/baseband_1330000000Hz_15-27-15_07-02-2026.wav"  //   3 MHz | 2.5
+
 
                 // 2026-02-02 16-46-58 1ant
-                "-i", "e:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026_1ant.wav"
+                // "-i", "e:/home/d7/Public/signals/OFDM/baseband_1331012500Hz_16-46-58_02-02-2026_1ant.wav"
                 // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1331012500Hz_16-46-58_02-02-2026_1ant/bw_0.00MHz_Fs_5.0MHz.wav" 
 
                 // "-i", "e:/home/d7/Public/signals/OFDM/.stageI_baseband_1331012500Hz_16-46-58_02-02-2026_1ant/bw_0.00MHz_Fs_5.0MHz.wav"

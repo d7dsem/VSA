@@ -1,3 +1,6 @@
-matplotlib
 numpy
 scipy
+matplotlib
+pyqtgraph
+PyQt6
+tqdm

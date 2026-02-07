@@ -116,6 +116,7 @@ class Burst:
     end: int        # Індекс кінця в семплах
     length: int     # Довжина в семплах (len)
     duration: float # Тривалість в секундах або мс (dur)
+    center_freq: float|None = None # Частотний центр 
     
 def do_file_stage_II(
     fr: FReader,
@@ -150,8 +151,6 @@ def do_file_stage_II(
     
     # OFDM Geometry (est)
     BURST_DUR = 720.0e-6
-
-
     SYM_PAYLOD_DUR = 327.6e-6
     CP_DUR = 20.0e-6
     SYM_DUR = SYM_PAYLOD_DUR + CP_DUR
@@ -161,18 +160,19 @@ def do_file_stage_II(
     if 1: # VSA pro call and exit
         # select part of record
         # s = 36_080
-        # e = s + iq_samples.size // 100 
+        # e = s + iq_samples.size // 1000
         
         s = 0
         # e = s + int(12 *BURST_DUR * Fs)
-        e = s + int(40 *BURST_DUR * Fs)
-        _ = deploy_vsa_pro(iq_samples[s:e], fr.Fs,
-                        file_id=f_id,
+        e = s + int(55 *BURST_DUR * Fs)
+        roi_dur_presets = [SYM_PAYLOD_DUR, PRE_DUR, CP_DUR, SYM_DUR, BURST_DUR]
+        _ = deploy_vsa_pro(iq_samples[s:e], fr.Fs, fr.f_path,
                         # extra_channels=['Pwr', 'dPh'],
                         # extra_channels=['Pwr', 'Corr'],
                         extra_channels=['dPh', 'Corr'],
                         # extra_channels=['Corr'],
-                        default_rois_dur_sec=SYM_PAYLOD_DUR,
+                        roi_dur_presets=roi_dur_presets,
+                        default_rois_dur_sec= SYM_PAYLOD_DUR,
                 )
         sys.exit(0)
         
