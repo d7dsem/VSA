@@ -258,6 +258,18 @@ class VSAProWindow(QWidget):
             'f_path',
         """
         super().__init__()
+        
+        # КРИТИЧНІ PRECONDITIONS
+        assert iq.size > 0, f"[VSA Pro] Empty IQ data (size={iq.size})"
+        assert Fs > 0, f"[VSA Pro] Invalid sample rate: Fs={Fs}"
+        assert np.iscomplexobj(iq), f"[VSA Pro] IQ must be complex, got dtype={iq.dtype}"
+    
+        self.normalize_display = kwargs.get('normalize_display', False)  # DEFAULT: False
+        if self.normalize_display:
+                # Scale IQ to [-1, 1] range
+                scale = np.max(np.abs(self.iq))
+                self.iq = self.iq / scale
+                print(f"[VSA] Normalized by factor {scale:.2e}")
         self.w_title = wtitle
         self.f_path: Path = kwargs.get("f_path", None)
         
@@ -404,6 +416,9 @@ class VSAProWindow(QWidget):
             p.getAxis('left').setWidth(self.CONFIG['y_axis_width'])
             p.setMouseEnabled(x=True, y=False)
             p.vb.setLimits(minXRange=2)
+            
+            # ФІКС: Disable autoRange для Y-axis (обходимо PyQtGraph overflow bug)
+            p.enableAutoRange(axis='y', enable=False)
             p.setLabel('left', name, color=self.CONFIG['colors'].get(name, '#fff'))
             self.plots[name] = p
             if i > 0: p.setXLink(self.plots['I'])
@@ -551,8 +566,23 @@ class VSAProWindow(QWidget):
         s1 = int(np.floor(r1)) 
         idx0, idx1 = max(0, s0), min(self.data_len - 1, s1)
         roi_slice = self.iq[idx0:idx1+1]
+        # === DEBUG BLOCK ===
+        if 1:
+            print(f"\n[ROI Debug]")
+            print(f"  Region: r0={r0:.2f}, r1={r1:.2f}")
+            print(f"  Indices: idx0={idx0}, idx1={idx1}")
+            print(f"  roi_slice: size={roi_slice.size}, dtype={roi_slice.dtype}")
+            print(f"  I channel: min={self.channels['I'].min():.6e}, max={self.channels['I'].max():.6e}, dtype={self.channels['I'].dtype}")
+            print(f"  Q channel: min={self.channels['Q'].min():.6e}, max={self.channels['Q'].max():.6e}, dtype={self.channels['Q'].dtype}")
+            print(f"  data_len={self.data_len}")
+        # === END DEBUG ===
         if self.corr_enabled:
             corr_complex = np.correlate(self.iq, roi_slice, mode='same')
+            # Нормування ЗАВЖДИ (незалежно від display mode)
+            norm_factor = np.sqrt(np.sum(np.abs(self.iq)**2) * np.sum(np.abs(roi_slice)**2))
+            assert norm_factor > 0, f"[Corr] Zero norm_factor: iq_energy={np.sum(np.abs(self.iq)**2)}, roi_energy={np.sum(np.abs(roi_slice)**2)}"
+            corr_complex = corr_complex / norm_factor
+            assert np.all(np.isfinite(corr_complex)), "[Corr] Non-finite values after normalization"
             self.corr_complex_cache = corr_complex  # Кешуємо для runtime switch
         self._update_corr_display()
         if hasattr(self, 'fft_module'):
@@ -635,11 +665,16 @@ class VSAProWindow(QWidget):
     def _fill_initial_data(self):
         for name in self.rows_names:
             color = self.CONFIG['colors'].get(name, '#fff')
+            data = self.channels[name]
+            # Малюємо дані
             self.curves[name] = self.plots[name].plot(
-                self.channels[name], 
+                data, 
                 pen=pg.mkPen(color, width=self.CONFIG['line_width'])
             )
-
+            # ФІКС: Manual Y-range (обходимо PyQtGraph overflow при autoRange)
+            y_min, y_max = np.min(data), np.max(data)
+            y_margin = (y_max - y_min) * 0.1  # 10% padding
+            self.plots[name].setYRange(y_min - y_margin, y_max + y_margin, padding=0)
     # ============================================================================
     #  Time marks
     def add_time_mark(self, time_sec: float):
@@ -698,6 +733,9 @@ class VSAProWindow(QWidget):
             data = np.angle(self.corr_complex_cache)
             if self.corr_phase_degrees:
                 data = np.degrees(data)
+        
+        # CLAMP екстремальних значень перед передачею в ViewBox
+        data = np.clip(data, -1e12, 1e12)  # <--- HARD LIMIT
         
         self.channels['Corr'] = data
         if 'Corr' in self.curves:
