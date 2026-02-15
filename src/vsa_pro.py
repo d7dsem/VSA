@@ -77,6 +77,7 @@ class ConstellationAnalytic:
             max_q = np.max(np.abs(q_vals))
             max_amp = max(max_i, max_q)
             r = max_amp * 1.1  # 10% padding
+            r = min(r, 1e6)
             self.plot.setXRange(-r, r, padding=0)
             self.plot.setYRange(-r, r, padding=0)
 
@@ -359,7 +360,7 @@ class VSAProWindow(QWidget):
         self.combo_fft_size.currentTextChanged.connect(lambda: self._on_roi_changed(self.rois[0]))
         top_lay.addWidget(self.combo_fft_size)
         
-                # --- ROI WIDTH CONTROL ---
+        # --- ROI WIDTH CONTROL ---
         top_lay.addSpacing(20)
         top_lay.addWidget(QLabel("ROI Width:"))
         
@@ -416,7 +417,14 @@ class VSAProWindow(QWidget):
             p.getAxis('left').setWidth(self.CONFIG['y_axis_width'])
             p.setMouseEnabled(x=True, y=False)
             p.vb.setLimits(minXRange=2)
-            
+            # ФІКС: Встановити розумні limits замість дефолтних ±1e+307
+            p.vb.setLimits(
+                xMin=-100,
+                xMax=self.data_len + 100,
+                yMin=-1e6,      # Замість -1e+307
+                yMax=1e6,       # Замість +1e+307
+                minXRange=2
+            )
             # ФІКС: Disable autoRange для Y-axis (обходимо PyQtGraph overflow bug)
             p.enableAutoRange(axis='y', enable=False)
             p.setLabel('left', name, color=self.CONFIG['colors'].get(name, '#fff'))
@@ -446,6 +454,7 @@ class VSAProWindow(QWidget):
         # FFT спектр (верхня частина, 2 частини висоти)
         fft_plot = self.analytics_panel.addPlot(row=0, col=0)
         fft_plot.showGrid(x=True, y=True, alpha=0.3)
+        fft_plot.vb.setLimits(xMin=-1e9, xMax=1e9, yMin=-200, yMax=100)
         self.ana_widgets['fft'] = fft_plot
 
         # Нижня панель — під-сітка з 2 колонками для constellation
@@ -454,10 +463,12 @@ class VSAProWindow(QWidget):
         # Два constellation віджети (горизонтально поруч)
         const_plot_1 = self.constellation_panel.addPlot(row=0, col=0)
         const_plot_1.showGrid(x=True, y=True, alpha=0.3)
+        const_plot_1.vb.setLimits(xMin=-1e6, xMax=1e6, yMin=-1e6, yMax=1e6)
         self.ana_widgets['constellation_1'] = const_plot_1
 
         const_plot_2 = self.constellation_panel.addPlot(row=0, col=1)
         const_plot_2.showGrid(x=True, y=True, alpha=0.3)
+        const_plot_2.vb.setLimits(xMin=-1e6, xMax=1e6, yMin=-1e6, yMax=1e6)
         self.ana_widgets['constellation_2'] = const_plot_2
 
         # Пропорції колонок у під-сітці (constellation_1 : constellation_2)
@@ -567,7 +578,7 @@ class VSAProWindow(QWidget):
         idx0, idx1 = max(0, s0), min(self.data_len - 1, s1)
         roi_slice = self.iq[idx0:idx1+1]
         # === DEBUG BLOCK ===
-        if 1:
+        if 0:
             print(f"\n[ROI Debug]")
             print(f"  Region: r0={r0:.2f}, r1={r1:.2f}")
             print(f"  Indices: idx0={idx0}, idx1={idx1}")
@@ -589,14 +600,16 @@ class VSAProWindow(QWidget):
             fft_size_str = self.combo_fft_size.currentText()
             fft_param = int(fft_size_str) if fft_size_str.isdigit() else None
             self.fft_module.update(roi_slice, self.Fs, fft_n=fft_param)
-        
+
         if hasattr(self, 'const_module_1'):
-            fft_result = np.fft.fft(roi_slice)
+            fft_result = np.fft.fft(roi_slice) 
+            fft_result /= np.max(np.abs(fft_result))
             self.const_module_1.update(fft_result)
         if hasattr(self, 'const_module_2'):
-            fft_result = np.fft.fft(roi_slice)
-            # fft_result = np.fft.fftshift(fft_result)
+            fft_result = np.fft.fft(roi_slice) 
+            fft_result /= np.max(np.abs(fft_result))
             fft_result = fft_result[:-1] * np.conj(fft_result[1:])
+            fft_result /= np.max(np.abs(fft_result))
             self.const_module_2.update(fft_result)
 
         t_str_1 =  sec2str(idx0 / self.Fs)
@@ -675,7 +688,17 @@ class VSAProWindow(QWidget):
             y_min, y_max = np.min(data), np.max(data)
             y_margin = (y_max - y_min) * 0.1  # 10% padding
             self.plots[name].setYRange(y_min - y_margin, y_max + y_margin, padding=0)
-    # ============================================================================
+            
+            # === ДІАГНОСТИКА ===
+            if 0:
+                print(f"\n[Plot {name}]")
+                print(f"  Y-range set: [{y_min - y_margin:.2f}, {y_max + y_margin:.2f}]")
+                vb_state = self.plots[name].vb.state
+                print(f"  ViewBox state['limits']: {vb_state.get('limits', 'None')}")
+                print(f"  AutoRange enabled (X): {self.plots[name].vb.autoRangeEnabled()[0]}")
+                print(f"  AutoRange enabled (Y): {self.plots[name].vb.autoRangeEnabled()[1]}")
+                print(f"  Current viewRange: {self.plots[name].vb.viewRange()}")
+             # ============================================================================
     #  Time marks
     def add_time_mark(self, time_sec: float):
         """Додати мітку по часу (в секундах)"""
